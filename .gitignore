@@ -1,0 +1,30 @@
+# 便携版程序（不上传）
+MyLauncherPortable/
+
+# 临时文件
+.temp/
+
+# node_modules
+MyLauncher-src/node_modules/
+node_modules/
+
+# 构建输出
+MyLauncher-src/dist/
+dist/
+
+# 编辑器
+.vscode/
+.idea/
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# 备份文件
+*.bak
+
+# Rust 构建输出
+MyLauncher-src/src-tauri/target/
+target/
