@@ -84,13 +84,13 @@ MyLauncher 是一款 Windows 桌面应用，帮你把散落在各个磁盘和目
 
 ## 技术栈
 
-| 层面 | 技术 |
-|------|------|
-| 桌面框架 | **Tauri v2** |
-| 前端 | **Vue 3** + **TypeScript** + **Vite** |
-| 后端 | **Rust**（2021 edition） |
-| 样式 | 纯 CSS（Fluent Design 风格，CSS 变量主题切换） |
-| 状态管理 | Vue 3 内置 `reactive`（无第三方库） |
+| 层面     | 技术                                           |
+| -------- | ---------------------------------------------- |
+| 桌面框架 | **Tauri v2**                                   |
+| 前端     | **Vue 3** + **TypeScript** + **Vite**          |
+| 后端     | **Rust**（2021 edition）                       |
+| 样式     | 纯 CSS（Fluent Design 风格，CSS 变量主题切换） |
+| 状态管理 | Vue 3 内置 `reactive`（无第三方库）            |
 
 ## 快速开始
 
@@ -166,3 +166,5 @@ data/
 ## 许可证
 
 MIT
+
+## 此项目完全由teleagent人工智能完成
