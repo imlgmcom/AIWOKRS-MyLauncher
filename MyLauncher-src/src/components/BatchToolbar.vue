@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { state, getCurrentEntries, toggleBatchMode, selectAllCurrent, invertSelection, clearSelection, deleteEntries, moveEntriesToCategory, convertEntriesPathMode, refreshEntriesIcons } from '@/store'
+import { state, getCurrentEntries, toggleBatchMode, selectAllCurrent, invertSelection, clearSelection, deleteEntries, moveEntriesToCategory, convertEntriesPathMode, refreshEntriesIcons, launchEntries } from '@/store'
 import BatchIconProgressDialog from '@/components/dialogs/BatchIconProgressDialog.vue'
 
 const selectedCount = computed(() => state.selectedIds.size)
@@ -12,6 +12,22 @@ const showBatchIconDialog = ref(false)
 
 const BATCH_ICON_THRESHOLD = 10
 
+/** 分类选项：按层级树显示（与 EntryEditor 分类选择器一致，全角空格缩进 + └ 前缀） */
+const categoryOptions = computed(() => {
+  const result: { id: string; name: string; depth: number }[] = []
+  const visit = (parentId: string | null, depth: number) => {
+    state.categories
+      .filter(c => c.parent_id === parentId)
+      .sort((a, b) => a.sort_order - b.sort_order)
+      .forEach(c => {
+        result.push({ id: c.id, name: c.name, depth })
+        visit(c.id, depth + 1)
+      })
+  }
+  visit(null, 0)
+  return result
+})
+
 async function batchDelete() {
   if (selectedCount.value === 0) return
   if (!confirm(`确认删除 ${selectedCount.value} 个条目？`)) return
@@ -22,9 +38,24 @@ async function batchDelete() {
 
 async function batchMove(categoryId: string) {
   if (selectedCount.value === 0) return
+  if (!categoryId) return
   const ids = Array.from(state.selectedIds)
   await moveEntriesToCategory(ids, categoryId)
   state.selectedIds.clear()
+}
+
+/** 批量启动：逐条启动选中条目（复用单条启动逻辑，路径失效/启动失败记入提示） */
+async function batchLaunch() {
+  if (selectedCount.value === 0) return
+  converting.value = true
+  convertMsg.value = ''
+  const ids = Array.from(state.selectedIds)
+  const result = await launchEntries(ids)
+  convertMsg.value = result.failed > 0
+    ? `成功 ${result.success} 项，失败 ${result.failed} 项${result.skipped > 0 ? `，跳过 ${result.skipped} 项` : ''}：\n${result.messages.join('\n')}`
+    : `已启动 ${result.success} 项${result.skipped > 0 ? `，跳过 ${result.skipped} 项` : ''}`
+  setTimeout(() => { convertMsg.value = '' }, 3000)
+  converting.value = false
 }
 
 async function batchConvertPath(targetMode: 'relative' | 'absolute') {
@@ -87,13 +118,16 @@ function exitBatchMode() {
     <div class="batch-right">
       <select class="batch-select" @change="batchMove(($event.target as HTMLSelectElement).value); ($event.target as HTMLSelectElement).value = ''">
         <option value="">移动到分类...</option>
-        <option v-for="cat in state.categories" :key="cat.id" :value="cat.id">{{ cat.name }}</option>
+        <option v-for="cat in categoryOptions" :key="cat.id" :value="cat.id">
+          {{ '　'.repeat(cat.depth) }}{{ cat.depth > 0 ? '└ ' : '' }}{{ cat.name }}
+        </option>
       </select>
       <select class="batch-select" @change="batchConvertPath(($event.target as HTMLSelectElement).value as 'relative' | 'absolute'); ($event.target as HTMLSelectElement).value = ''" :disabled="converting || selectedCount === 0">
         <option value="">转换路径模式...</option>
         <option value="relative">转为相对路径</option>
         <option value="absolute">转为绝对路径</option>
       </select>
+      <button class="btn" @click="batchLaunch" :disabled="converting || selectedCount === 0">▶ 批量启动</button>
       <button class="btn" @click="batchRefreshIcons" :disabled="converting || selectedCount === 0">🔄 重置图标</button>
       <button class="btn btn-danger" @click="batchDelete" :disabled="selectedCount === 0">删除</button>
       <button class="btn" @click="exitBatchMode">退出批量</button>
@@ -150,6 +184,22 @@ function exitBatchMode() {
   font-size: 12px;
   cursor: pointer;
   outline: none;
+  /* 文字跟随主题（暗色下变浅，避免黑字看不清） */
+  color: var(--color-text);
+}
+
+/* 下拉展开的选项列表跟随主题配色（暗色下深底浅字） */
+.batch-select option {
+  background: var(--color-bg-card);
+  color: var(--color-text);
+}
+
+.batch-select:hover {
+  border-color: var(--color-primary-light);
+}
+
+.batch-select:focus {
+  border-color: var(--color-primary);
 }
 
 .batch-convert-msg {

@@ -465,6 +465,47 @@ export async function updateLastUsed(id: string) {
   }
 }
 
+// 批量启动：逐条调用后端启动，成功后更新最后使用时间
+// 路径类条目先 resolve_path 校验，路径失效则计入失败并记录提示；网址/系统/APPX 直接启动
+export async function launchEntries(ids: string[]): Promise<{ success: number; failed: number; skipped: number; messages: string[] }> {
+  const messages: string[] = []
+  let success = 0
+  let failed = 0
+  let skipped = 0
+
+  for (const id of ids) {
+    const entry = state.entries.find(e => e.id === id)
+    if (!entry) continue
+    try {
+      let ok = false
+      if (entry.type === 'url' || entry.type === 'system' || entry.type === 'appx') {
+        ok = await api.launch_program(entry, state.currentEnvId)
+      } else {
+        const pathInfo = await api.resolve_path(entry, state.currentEnvId)
+        if (!pathInfo.exists) {
+          failed++
+          messages.push(`${entry.name}: 路径失效`)
+          continue
+        }
+        ok = await api.launch_program(entry, state.currentEnvId)
+      }
+      if (ok) {
+        success++
+        state.entries[state.entries.findIndex(e => e.id === id)].last_used = await api.get_now()
+      } else {
+        failed++
+        messages.push(`${entry.name}: 启动失败`)
+      }
+    } catch (e) {
+      failed++
+      messages.push(`${entry.name}: ${e}`)
+    }
+  }
+
+  if (success > 0) await api.save_entries(state.entries)
+  return { success, failed, skipped, messages }
+}
+
 // ─── Actions: 环境 ───
 
 export async function addEnvironment(env: Omit<Environment, 'id'>): Promise<string> {
