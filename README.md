@@ -4,6 +4,11 @@
 
 MyLauncher 是一款 Windows 桌面应用，帮你把散落在各个磁盘和目录下的程序、游戏、网址、文件夹、系统功能统一收录到一个界面中，按分类整理，双击即可启动。整个程序无需安装，拷贝即用。
 
+## 此项目完全由teleagent人工智能完成
+
+- 邀请链接注册或者填写邀请码 **8KZLAG** 可以额外获得3000点积分
+- [https://agent.teleai.com.cn/s/3Z7DF9XWJC](https://agent.teleai.com.cn/s/3Z7DF9XWJC)
+
 ## 功能特性
 
 - **多类型收录** — 支持添加程序（exe）、网址、文件夹、文件、系统功能、UWP 应用
@@ -166,5 +171,3 @@ data/
 ## 许可证
 
 MIT
-
-## 此项目完全由teleagent人工智能完成
