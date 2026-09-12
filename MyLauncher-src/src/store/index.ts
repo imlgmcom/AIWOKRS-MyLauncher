@@ -51,6 +51,9 @@ const state = reactive<StoreState>({
       '{scheme}://{domain}/favicon.ico',
     ],
     theme: 'system',
+    sidebar_collapsed: false,
+    card_cover_ratio: '16:9',
+    masonry_max_height: 480,
   },
   environments: [],
   categories: [],
@@ -322,6 +325,19 @@ export async function updateEntry(id: string, updates: Partial<Entry>) {
   }
 }
 
+/** 同步后端批量导入已写盘的新条目到内存状态（id/分类已由后端分配），并校正 ID 计数器 */
+export function appendImportedEntries(entries: Entry[]) {
+  if (entries.length === 0) return
+  state.entries.push(...entries)
+  const maxId = entries.reduce((max, e) => {
+    const match = e.id.match(/entry_(\d+)/)
+    return match ? Math.max(max, parseInt(match[1])) : max
+  }, 0)
+  if (maxId + 1 > state.idCounter) {
+    state.idCounter = maxId + 1
+  }
+}
+
 // 收集条目的资源文件引用（图标 + 封面，assets 相对路径），供删除后联动清理
 function collectEntryAssetSources(entries: Entry[]): string[] {
   const sources: string[] = []
@@ -375,8 +391,8 @@ export async function convertEntriesPathMode(ids: string[], targetMode: 'relativ
     const idx = state.entries.findIndex(e => e.id === id)
     if (idx < 0) continue
     const entry = state.entries[idx]
-    // 网址/系统功能/APPX 不转换路径
-    if (entry.type === 'url' || entry.type === 'system' || entry.type === 'appx') continue
+    // 网址/系统功能/APPX/Steam 不转换路径（Steam 的 exe 路径仅作定位/直启用，模式固定绝对）
+    if (entry.type === 'url' || entry.type === 'system' || entry.type === 'appx' || entry.type === 'steam') continue
 
     // 已经是目标模式，直接忽略
     if (entry.path_mode === targetMode) {
@@ -440,8 +456,8 @@ export async function refreshEntriesIcons(ids: string[]): Promise<{ success: num
         // bump 图标版本：URL 拼上 ?v= 强制 WebView 重载新图（文件路径不变时会命中缓存）
         bumpIconVersion(r.icon_path)
         success++
-      } else if (entry.type === 'url') {
-        // url 类型 favicon 链全失败：跳过（保持原图标不变）
+      } else if (entry.type === 'url' || entry.type === 'steam') {
+        // url 类型 favicon 链全失败 / steam 条目无 exe 路径：跳过（保持原图标不变）
         skipped++
       } else {
         failed++
@@ -478,7 +494,7 @@ export async function launchEntries(ids: string[]): Promise<{ success: number; f
     if (!entry) continue
     try {
       let ok = false
-      if (entry.type === 'url' || entry.type === 'system' || entry.type === 'appx') {
+      if (entry.type === 'url' || entry.type === 'system' || entry.type === 'appx' || entry.type === 'steam') {
         ok = await api.launch_program(entry, state.currentEnvId)
       } else {
         const pathInfo = await api.resolve_path(entry, state.currentEnvId)

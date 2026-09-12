@@ -12,8 +12,8 @@ export interface CoverResource {
   source: string
 }
 
-/** 条目类型：程序/网址/文件夹/文件/系统功能/APPX应用 */
-export type EntryType = 'program' | 'url' | 'folder' | 'file' | 'system' | 'appx'
+/** 条目类型：程序/网址/文件夹/文件/系统功能/APPX应用/Steam游戏 */
+export type EntryType = 'program' | 'url' | 'folder' | 'file' | 'system' | 'appx' | 'steam'
 
 export interface Entry {
   id: string
@@ -41,7 +41,7 @@ export interface Category {
   name: string
   parent_id: string | null
   icon: ImageResource
-  view_mode: 'vertical_card' | 'horizontal_card' | 'icon_grid' | 'table'
+  view_mode: ViewMode
   sort_order: number
   is_top_level: boolean
 }
@@ -74,6 +74,12 @@ export interface AppConfig {
   favicon_api_sources: string[]
   /** 界面主题: "light" 明亮 | "dark" 暗黑 | "system" 跟随系统 */
   theme: 'light' | 'dark' | 'system'
+  /** 侧导航是否折叠（隐藏） */
+  sidebar_collapsed: boolean
+  /** 竖向卡片封面宽高比例，如 "16:9" | "4:3" | "1:1" | "3:4" | "9:16" */
+  card_cover_ratio: string
+  /** 瀑布流封面图最大高度（px），默认 480 */
+  masonry_max_height: number
 }
 
 /** 开机自启状态（读注册表实际值） */
@@ -89,6 +95,20 @@ export interface AllData {
   entries: Entry[]
 }
 
+/** Steam 游戏信息（识别为 Steam 游戏时附带） */
+export interface SteamGameInfo {
+  /** Steam 应用 ID（appmanifest_*.acf 的 appid） */
+  app_id: string
+  /** 游戏安装目录名（appmanifest 的 installdir） */
+  install_dir: string
+  /** 游戏 exe 绝对路径（可能为空） */
+  exe_path: string
+  /** 封面图相对路径（assets/covers/steam/{appid}.jpg，空表示未获取到；扫描阶段为空，导入时填充） */
+  cover_path: string
+  /** Steam 安装目录（导入阶段定位本地封面缓存用，可能为空） */
+  steam_dir: string
+}
+
 export interface ExeInfo {
   name: string
   icon_path: string
@@ -96,6 +116,24 @@ export interface ExeInfo {
   relative_path: string
   absolute_path: string
   file_exists: boolean
+  /** Steam 游戏信息（识别为 Steam 游戏时填充，否则为 null） */
+  steam?: SteamGameInfo | null
+  /** 该 Steam 游戏发现多个候选 exe（后端已展开为多条，红色提示用户勾选） */
+  multi_exe?: boolean
+  /** 是否主程序 exe（多候选时的第一个，默认选中；单 exe 时为 true） */
+  is_primary?: boolean
+}
+
+/** 按 Steam 应用 ID 扫描单个游戏的结果 */
+export interface SteamAppScanResult {
+  /** 游戏名称（appmanifest 的 name） */
+  name: string
+  /** 游戏 exe 绝对路径（可能为空） */
+  exe_path: string
+  /** 封面图相对路径（assets/covers/steam/{appid}.jpg，空表示未获取到） */
+  cover_path: string
+  /** 图标相对路径（从游戏 exe 提取，可能为空） */
+  icon_path: string
 }
 
 /** 文件/文件夹信息 */
@@ -170,7 +208,7 @@ export interface BookmarkParseResult {
 }
 
 // 视图模式
-export type ViewMode = 'vertical_card' | 'horizontal_card' | 'icon_grid' | 'table'
+export type ViewMode = 'vertical_card' | 'horizontal_card' | 'icon_grid' | 'table' | 'waterfall'
 
 /** APPX / UWP 应用信息（来自 Get-StartApps 枚举） */
 export interface AppxAppInfo {
@@ -241,4 +279,25 @@ export interface BatchIconSummary {
   skipped: number
   failed: number
   results: BatchIconItemResult[]
+}
+
+/** 批量导入扫描结果 - 事件推送的单条进度 */
+export interface ImportProgressEvent {
+  done: number
+  total: number
+  /** 当前正在导入的条目名 */
+  name: string
+  /** success | failed */
+  status: 'success' | 'failed'
+  /** 失败或提示信息（成功且无提示时为空） */
+  message: string
+}
+
+/** 批量导入扫描结果 - 整体统计（后端命令返回值） */
+export interface ImportScanSummary {
+  total: number
+  success: number
+  failed: number
+  /** 新导入并已写盘的 Entry（含 id，前端直接同步内存状态） */
+  entries: Entry[]
 }

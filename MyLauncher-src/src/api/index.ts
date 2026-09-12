@@ -6,8 +6,8 @@ import { invoke } from '@tauri-apps/api/core'
 import { open, save } from '@tauri-apps/plugin-dialog'
 import type {
   AllData, AppConfig, AssetCleanResult, AutorunStatus, BatchIconSummary, Category, Entry, Environment,
-  ExeInfo, FileInfo, IconRefreshResult, InitResult, LnkInfo, PathInfo, ScanResult, ConvertPathResult,
-  BookmarkParseResult, AppxAppInfo
+  ExeInfo, FileInfo, IconRefreshResult, ImportScanSummary, InitResult, LnkInfo, PathInfo, ScanResult, ConvertPathResult,
+  BookmarkParseResult, AppxAppInfo, SteamAppScanResult
 } from '@/types'
 
 // ─── 数据持久化 ───
@@ -96,6 +96,22 @@ export async function scan_directory(dirPath: string, maxDepth?: number): Promis
   return invoke<ScanResult>('scan_directory', { dirPath, maxDepth })
 }
 
+// ─── Steam 游戏按 ID 扫描 ───
+
+/** 按 Steam 应用 ID 扫描已安装游戏（注册表定位 Steam → 遍历所有库 → 解析 appmanifest），
+ *  返回名称/exe 路径/封面/图标；游戏不存在或未安装时抛错 */
+export async function scan_steam_app(appId: string): Promise<SteamAppScanResult> {
+  return invoke<SteamAppScanResult>('scan_steam_app', { appId })
+}
+
+// ─── 扫描结果批量导入 ───
+
+/** 批量导入扫描结果（后端多线程提取图标/下载封面/构造 Entry 后一次写盘，
+ *  逐条推送 import-progress 事件，完成后返回整体统计与已写盘的新 Entry） */
+export async function import_scan_items(items: ExeInfo[], categoryId: string, currentEnvId: string): Promise<ImportScanSummary> {
+  return invoke<ImportScanSummary>('import_scan_items', { items, categoryId, currentEnvId })
+}
+
 // ─── 文件操作 ───
 
 export async function copy_file_to_assets(sourcePath: string, targetSubdir: string): Promise<string> {
@@ -171,8 +187,8 @@ export async function get_autorun(): Promise<AutorunStatus> {
 
 // ─── 文件选择对话框 ───
 
-export async function pick_file(filters?: { name: string; extensions: string[] }[]): Promise<string | null> {
-  const result = await open({ filters, multiple: false })
+export async function pick_file(filters?: { name: string; extensions: string[] }[], defaultPath?: string): Promise<string | null> {
+  const result = await open({ filters, multiple: false, defaultPath: defaultPath || undefined })
   return result as string | null
 }
 

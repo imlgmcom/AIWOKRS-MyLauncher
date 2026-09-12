@@ -117,6 +117,15 @@ pub struct AppConfig {
     /// 界面主题: "light"（明亮） | "dark"（暗黑） | "system"（跟随系统）
     #[serde(default = "default_theme")]
     pub theme: String,
+    /// 侧导航是否折叠隐藏
+    #[serde(default)]
+    pub sidebar_collapsed: bool,
+    /// 竖向卡片封面宽高比例，如 "16:9" | "4:3" | "1:1" | "3:4" | "9:16"
+    #[serde(default = "default_card_cover_ratio")]
+    pub card_cover_ratio: String,
+    /// 瀑布流封面图最大高度（px），默认 480
+    #[serde(default = "default_masonry_max_height")]
+    pub masonry_max_height: u32,
 }
 
 fn default_logo_icon() -> String { "🪷".to_string() }
@@ -124,6 +133,8 @@ fn default_logo_icon_type() -> String { "emoji".to_string() }
 fn default_logo_text() -> String { "MyLauncher".to_string() }
 fn default_close_action() -> String { "tray".to_string() }
 fn default_theme() -> String { "system".to_string() }
+fn default_card_cover_ratio() -> String { "16:9".to_string() }
+fn default_masonry_max_height() -> u32 { 480 }
 
 /// 默认 favicon 获取源（三个 API 模板，按序尝试）
 fn default_favicon_api_sources() -> Vec<String> {
@@ -155,6 +166,15 @@ pub struct ExeInfo {
     pub relative_path: String,
     pub absolute_path: String,
     pub file_exists: bool,
+    /// Steam 游戏信息（识别为 Steam 游戏时填充，否则为 None）
+    #[serde(default)]
+    pub steam: Option<SteamGameInfo>,
+    /// 该 Steam 游戏发现多个候选 exe（后端已展开为多条，前端红色提示用户勾选）
+    #[serde(default)]
+    pub multi_exe: bool,
+    /// 是否主程序 exe（多候选时的第一个，默认选中；单 exe 时为 true）
+    #[serde(default)]
+    pub is_primary: bool,
 }
 
 /// 快捷方式解析结果
@@ -186,6 +206,23 @@ pub struct LnkInfo {
 pub struct ScanResult {
     pub results: Vec<ExeInfo>,
     pub total: usize,
+}
+
+/// Steam 游戏信息（识别 Steam 安装目录时附加在 ExeInfo 上）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SteamGameInfo {
+    /// Steam 应用 ID（appmanifest_*.acf 的 appid）
+    pub app_id: String,
+    /// 游戏安装目录名（appmanifest 的 installdir，如 "Counter-Strike Global Offensive"）
+    pub install_dir: String,
+    /// 游戏 exe 绝对路径（在 installdir 下递归查找的候选 exe，可能为空）
+    pub exe_path: String,
+    /// 封面图相对路径（assets/covers/steam/{appid}.jpg，空表示未获取到；
+    /// 扫描阶段不再获取，导入时由 import_scan_items 填充）
+    pub cover_path: String,
+    /// Steam 安装目录（导入阶段定位本地封面缓存 appcache/librarycache 用）
+    #[serde(default)]
+    pub steam_dir: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -494,6 +531,9 @@ fn default_config() -> AppConfig {
         custom_emojis: vec![],
         favicon_api_sources: default_favicon_api_sources(),
         theme: default_theme(),
+        sidebar_collapsed: false,
+        card_cover_ratio: default_card_cover_ratio(),
+        masonry_max_height: default_masonry_max_height(),
     }
 }
 
@@ -507,7 +547,7 @@ fn init_data_dir() -> Result<InitResult, String> {
     let assets_dir = get_assets_dir()?;
 
     // 创建子目录
-    for sub in &["icons/custom", "icons/extracted", "covers/custom", "logo"] {
+    for sub in &["icons/custom", "icons/extracted", "covers/custom", "covers/steam", "logo"] {
         let _ = ensure_dir(&assets_dir.join(sub));
     }
 
@@ -658,6 +698,33 @@ fn resolve_path_inner(entry: &Entry, current_env_id: &str) -> Result<PathInfo, S
         });
     }
 
+    // Steam 游戏：解析游戏 exe 路径（存于 absolute_paths），存在性即有效性；
+    // 启动链接存在即可视有效，exe 缺失（如未下载完）不阻断启动
+    if entry.entry_type == "steam" {
+        // 优先解析 exe 路径（「直接启动 exe」/「目录」定位/图标提取都依赖它）
+        if let Some(abs_path) = entry.absolute_paths.get(current_env_id) {
+            if !abs_path.is_empty() {
+                let exists = Path::new(abs_path).exists();
+                let resolved = if exists {
+                    normalize_path(Path::new(abs_path)).to_string_lossy().to_string()
+                } else {
+                    abs_path.clone()
+                };
+                return Ok(PathInfo {
+                    resolved,
+                    exists,
+                    path_mode: "absolute".to_string(),
+                });
+            }
+        }
+        // 无 exe 路径：回落到启动链接（steam:// 协议恒有效）
+        return Ok(PathInfo {
+            resolved: entry.url.clone(),
+            exists: !entry.url.is_empty(),
+            path_mode: "url".to_string(),
+        });
+    }
+
     // 特殊 URI（shell:/ms-settings: 等）：不是文件路径，恒视为存在
     // 检查相对路径和当前环境绝对路径两处
     if !entry.relative_path.is_empty() && is_special_uri(&entry.relative_path) {
@@ -762,6 +829,15 @@ fn launch_program(entry: Entry, current_env_id: String) -> Result<bool, String> 
     if entry.entry_type == "url" {
         if entry.url.is_empty() {
             return Err("网址为空".to_string());
+        }
+        return shell_execute_open(entry.url.trim(), None, false, SW_SHOWNORMAL.0);
+    }
+
+    // Steam 游戏：启动链接（steam://rungameid/{appid}）经系统协议唤起 Steam 客户端
+    // （「直接启动 exe」由前端构造临时 program 条目走下方的程序分支）
+    if entry.entry_type == "steam" {
+        if entry.url.is_empty() {
+            return Err("Steam 启动链接为空".to_string());
         }
         return shell_execute_open(entry.url.trim(), None, false, SW_SHOWNORMAL.0);
     }
@@ -1073,6 +1149,9 @@ fn get_exe_info(exe_path: String) -> Result<ExeInfo, String> {
             relative_path: String::new(),
             absolute_path: exe_path.clone(),
             file_exists: false,
+            steam: None,
+            multi_exe: false,
+            is_primary: true,
         });
     }
 
@@ -1100,6 +1179,9 @@ fn get_exe_info(exe_path: String) -> Result<ExeInfo, String> {
         relative_path: rel_path,
         absolute_path: exe_path.clone(),
         file_exists: true,
+        steam: None,
+        multi_exe: false,
+        is_primary: true,
     })
 }
 
@@ -1458,6 +1540,15 @@ impl IconRefreshResult {
 /// 不修改 JSON 数据（由前端保存），仅生成新图标文件。
 fn refresh_icon_inner(entry: &Entry, current_env_id: &str) -> Result<String, String> {
     match entry.entry_type.as_str() {
+        "steam" => {
+            // Steam 游戏：与 program 一致，从解析出的游戏 exe 提取图标
+            // （resolve_path_inner 对 steam 条目优先解析 absolute_paths 中的 exe 路径）
+            let info = resolve_path_inner(entry, current_env_id)?;
+            if !info.exists {
+                return Err(format!("游戏主程序不存在: {}", info.resolved));
+            }
+            extract_icon_to_png(&info.resolved)
+        }
         "program" | "folder" | "file" => {
             // 复用 resolve_path 的解析逻辑（相对 → 当前环境绝对 → fallback）
             let info = resolve_path_inner(entry, current_env_id)?;
@@ -1690,17 +1781,339 @@ fn extract_appx_icon(app_key: String, shell_uri: String) -> Result<String, Strin
 
 // ─── 文件夹扫描 ───
 
+/// 判断指定目录是否为 Steam 安装目录（存在 steamapps 子目录）
+fn is_steam_dir(path: &Path) -> bool {
+    path.join("steamapps").is_dir()
+}
+
+/// 读取 steamapps 目录下的所有 appmanifest_*.acf，解析出 Steam 游戏列表。
+/// 每个条目包含 appid/name/installdir（解析失败的行跳过）。
+fn read_steam_manifests(steamapps_dir: &Path) -> Vec<(String, String, String)> {
+    let mut games = Vec::new();
+    let entries = match std::fs::read_dir(steamapps_dir) {
+        Ok(e) => e,
+        Err(_) => return games,
+    };
+
+    for item in entries.flatten() {
+        let path = item.path();
+        let fname = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+        if !fname.starts_with("appmanifest_") || !fname.ends_with(".acf") {
+            continue;
+        }
+        let content = match std::fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        let mut appid = String::new();
+        let mut name = String::new();
+        let mut installdir = String::new();
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() { continue; }
+            if let Some(v) = extract_acf_value(line, "appid") { appid = v.to_string(); }
+            else if let Some(v) = extract_acf_value(line, "name") { name = v.to_string(); }
+            else if let Some(v) = extract_acf_value(line, "installdir") { installdir = v.to_string(); }
+        }
+        if !appid.is_empty() && !name.is_empty() && !installdir.is_empty() {
+            games.push((appid, name, installdir));
+        }
+    }
+    games
+}
+
+/// 从 acf 行中提取指定 key 的字符串值（支持 "key" "value" 形式）
+fn extract_acf_value(line: &str, key: &str) -> Option<String> {
+    let trimmed = line.trim();
+    let rest = trimmed.strip_prefix(&format!("\"{}\"", key))?;
+    let rest = rest.trim_start();
+    let rest = rest.strip_prefix('"')?;
+    let end = rest.find('"')?;
+    Some(rest[..end].to_string())
+}
+
+/// 在游戏安装目录下递归查找候选 exe（跳过常见无意义文件，如 unins*.exe /
+/// Redist 目录 / win 开头文件）。返回全部候选，第一个视为主程序。
+fn find_game_exes(install_dir: &Path) -> Vec<String> {
+    let mut found = Vec::new();
+    for entry in walkdir::WalkDir::new(install_dir)
+        .max_depth(4)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
+        let path = entry.path();
+        if !path.is_file() { continue; }
+        let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+        if ext != "exe" { continue; }
+        let fname = path.file_name().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+        if fname.starts_with("unins") { continue; }
+        if fname.starts_with("win") && fname.ends_with(".exe") { continue; }
+        // 跳过 redist/vcredist 等常见非游戏主程序
+        let rel = path.strip_prefix(install_dir).unwrap_or(path);
+        let rel_lower = rel.to_string_lossy().to_lowercase();
+        if rel_lower.contains("redist") || rel_lower.contains("vcredist") || rel_lower.contains("directx") {
+            continue;
+        }
+        found.push(path.to_string_lossy().to_string());
+    }
+    found
+}
+
+/// 尝试将 Steam 本地缓存的 header 图（appcache/librarycache/{appid}_header.jpg）复制到
+/// assets/covers/steam/{appid}.jpg；缓存缺失时尝试从 CDN 下载（2 秒超时）。
+/// 全部失败返回空字符串（条目不设封面）。
+fn get_steam_cover(steam_install_dir: &Path, appid: &str) -> String {
+    // 0. 目标已存在直接复用（同一游戏多 exe 并发导入时避免并发写同一文件失败）
+    if let Ok(assets_dir) = get_assets_dir() {
+        let target = assets_dir.join("covers").join("steam").join(format!("{}.jpg", appid));
+        if target.is_file() {
+            return rel_to_exe_dir(&target);
+        }
+    }
+
+    // 1. 优先复制 Steam 本地缓存（用户明确要求优先用本地缓存）
+    let cache_dir = steam_install_dir.join("appcache").join("librarycache");
+    let cache_file = cache_dir.join(format!("{}_header.jpg", appid));
+    if cache_file.is_file() {
+        if let Ok(rel) = copy_steam_cover_to_assets(&cache_file, appid) {
+            return rel;
+        }
+    }
+
+    // 2. 本地缓存缺失 → 从 CDN 下载（与 favicon 相同的 2 秒超时客户端）
+    let url = format!("https://cdn.cloudflare.steamstatic.com/steam/apps/{}/header.jpg", appid);
+    let client = match reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return String::new(),
+    };
+    let bytes = match client.get(&url).send().and_then(|r| r.bytes()) {
+        Ok(b) => b,
+        Err(_) => return String::new(),
+    };
+    if bytes.is_empty() || !bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        return String::new();
+    }
+
+    let assets_dir = match get_assets_dir() {
+        Ok(d) => d,
+        Err(_) => return String::new(),
+    };
+    let steam_dir = assets_dir.join("covers").join("steam");
+    if ensure_dir(&steam_dir).is_err() {
+        return String::new();
+    }
+    let target = steam_dir.join(format!("{}.jpg", appid));
+    if std::fs::write(&target, &bytes).is_ok() {
+        rel_to_exe_dir(&target)
+    } else {
+        String::new()
+    }
+}
+
+/// 将本地 header 图片复制到 assets/covers/steam/{appid}.jpg，返回相对路径
+fn copy_steam_cover_to_assets(src: &Path, appid: &str) -> Result<String, String> {
+    let assets_dir = get_assets_dir()?;
+    let steam_dir = assets_dir.join("covers").join("steam");
+    ensure_dir(&steam_dir)?;
+    let target = steam_dir.join(format!("{}.jpg", appid));
+    std::fs::copy(src, &target)
+        .map_err(|e| format!("复制封面失败: {}", e))?;
+    Ok(rel_to_exe_dir(&target))
+}
+
+/// 从注册表 HKCU\Software\Valve\Steam 读取 Steam 安装路径（SteamPath 值）。
+/// 未安装 Steam 或读取失败返回 None。
+#[cfg(windows)]
+fn get_steam_install_dir_from_registry() -> Option<PathBuf> {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+    use windows::core::PCWSTR;
+    use windows::Win32::System::Registry::{RegCloseKey, RegOpenKeyW, RegQueryValueExW, HKEY, HKEY_CURRENT_USER};
+
+    fn to_wide(s: &str) -> Vec<u16> {
+        OsStr::new(s).encode_wide().chain(std::iter::once(0)).collect()
+    }
+
+    unsafe {
+        let sub_key = to_wide(r"Software\Valve\Steam");
+        let value_name = to_wide("SteamPath");
+        let mut key = HKEY::default();
+        // 只读打开（不创建）：未安装 Steam 时返回失败
+        if RegOpenKeyW(HKEY_CURRENT_USER, PCWSTR(sub_key.as_ptr()), &mut key).is_err() {
+            return None;
+        }
+        let mut buf_len: u32 = 0;
+        let query = RegQueryValueExW(
+            key,
+            PCWSTR(value_name.as_ptr()),
+            None,
+            None,
+            None,
+            Some(&mut buf_len),
+        );
+        if query.is_err() || buf_len == 0 {
+            let _ = RegCloseKey(key);
+            return None;
+        }
+        let mut buf = vec![0u8; buf_len as usize];
+        let result = RegQueryValueExW(
+            key,
+            PCWSTR(value_name.as_ptr()),
+            None,
+            None,
+            Some(buf.as_mut_ptr()),
+            Some(&mut buf_len),
+        );
+        let _ = RegCloseKey(key);
+        if result.is_err() {
+            return None;
+        }
+        // 字节 → UTF-16 字符串（去掉结尾 NUL）
+        let words: Vec<u16> = buf
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        let s = String::from_utf16_lossy(&words);
+        let s = s.trim_end_matches('\0');
+        if s.is_empty() { None } else { Some(PathBuf::from(s)) }
+    }
+}
+
+#[cfg(not(windows))]
+fn get_steam_install_dir_from_registry() -> Option<PathBuf> {
+    None
+}
+
+/// 解析主 Steam 目录下 steamapps/libraryfolders.vdf，返回所有库的 steamapps 目录列表
+/// （含主库）。文件缺失或解析失败时仅返回主库。
+fn read_steam_library_dirs(steam_dir: &Path) -> Vec<PathBuf> {
+    let main_steamapps = steam_dir.join("steamapps");
+    let mut libs = vec![main_steamapps.clone()];
+
+    let vdf_path = main_steamapps.join("libraryfolders.vdf");
+    let content = match std::fs::read_to_string(&vdf_path) {
+        Ok(c) => c,
+        Err(_) => return libs,
+    };
+    // 逐行提取 "path" 值（vdf KeyValues 格式，与 acf 相同的行级 key-value）
+    // 路径中的 \\ 转义还原为 \
+    for line in content.lines() {
+        if let Some(p) = extract_acf_value(line.trim(), "path") {
+            if p.is_empty() { continue; }
+            let dir = PathBuf::from(p.replace("\\\\", "\\")).join("steamapps");
+            // 去重：主库通常也出现在 vdf 中
+            if !libs.contains(&dir) {
+                libs.push(dir);
+            }
+        }
+    }
+    libs
+}
+
+/// 按 Steam 应用 ID 查找已安装游戏的扫描结果
+#[derive(Debug, Clone, Serialize)]
+struct SteamAppScanResult {
+    /// 游戏名称（appmanifest 的 name）
+    pub name: String,
+    /// 游戏 exe 绝对路径（安装目录下递归查找，可能为空）
+    pub exe_path: String,
+    /// 封面图相对路径（assets/covers/steam/{appid}.jpg，空表示未获取到）
+    pub cover_path: String,
+    /// 图标相对路径（从游戏 exe 提取，可能为空）
+    pub icon_path: String,
+}
+
+/// 按 Steam 应用 ID 扫描单个已安装游戏。
+/// 流程：注册表定位 Steam → 解析 libraryfolders.vdf 遍历所有库 →
+/// 各库找 steamapps/appmanifest_{appid}.acf → 回填名称/exe/封面/图标。
+/// 找不到 manifest 说明该 ID 游戏不存在或未安装。
 #[command]
-fn scan_directory(dir_path: String, max_depth: Option<usize>) -> Result<ScanResult, String> {
+fn scan_steam_app(app_id: String) -> Result<SteamAppScanResult, String> {
+    let app_id = app_id.trim().to_string();
+    if app_id.is_empty() {
+        return Err("请输入 Steam 游戏 ID".to_string());
+    }
+
+    let steam_dir = get_steam_install_dir_from_registry()
+        .ok_or_else(|| "未检测到 Steam 客户端（注册表 HKCU\\Software\\Valve\\Steam）".to_string())?;
+    if !steam_dir.is_dir() {
+        return Err(format!("Steam 目录不存在: {}", steam_dir.display()));
+    }
+
+    // 遍历所有库找 appmanifest_{appid}.acf
+    let manifest_file = format!("appmanifest_{}.acf", app_id);
+    for lib_steamapps in read_steam_library_dirs(&steam_dir) {
+        let manifest_path = lib_steamapps.join(&manifest_file);
+        let content = match std::fs::read_to_string(&manifest_path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        let mut name = String::new();
+        let mut installdir = String::new();
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() { continue; }
+            if let Some(v) = extract_acf_value(line, "name") { name = v; }
+            else if let Some(v) = extract_acf_value(line, "installdir") { installdir = v; }
+        }
+        if name.is_empty() || installdir.is_empty() {
+            continue;
+        }
+
+        // 解析游戏信息（exe/封面/图标）——单游戏流程量小，保留即时提取
+        let install_dir = lib_steamapps.join("common").join(&installdir);
+        if !install_dir.is_dir() {
+            return Err(format!("游戏目录不存在: {}", install_dir.display()));
+        }
+        let game_exe = find_game_exes(&install_dir).into_iter().next().unwrap_or_default();
+        let cover_path = get_steam_cover(&steam_dir, &app_id);
+        let icon_path = if !game_exe.is_empty() {
+            extract_icon_to_png(&game_exe).unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        return Ok(SteamAppScanResult { name, exe_path: game_exe, cover_path, icon_path });
+    }
+
+    Err(format!("游戏 ID {} 不存在或未安装（所有 Steam 库中均未找到 appmanifest_{}.acf）", app_id, app_id))
+}
+
+/// 扫描目录（普通文件夹/Steam 安装目录）。
+/// 扫描阶段不提取图标、不下载封面（保证速度），仅收集文件清单；
+/// 图标/封面等重操作移到导入命令 import_scan_items 中执行。
+/// 异步执行并推送 scan-progress 事件（前端进度弹窗实时展示）：
+///   - phase="walking"  ：遍历文件阶段，payload 含 found（已发现的 exe 数）
+///   - phase="icons"    ：解析阶段（Steam 游戏清单），payload 含 done/total
+/// 事件名：scan-progress
+#[command]
+async fn scan_directory(app: tauri::AppHandle, dir_path: String, max_depth: Option<usize>) -> Result<ScanResult, String> {
     let path = Path::new(&dir_path);
     if !path.exists() || !path.is_dir() {
         return Err(format!("目录不存在: {}", dir_path));
+    }
+
+    // Steam 安装目录：直接解析 appmanifest 生成游戏条目（不递归扫 exe）
+    if is_steam_dir(path) {
+        let _ = app.emit("scan-progress", serde_json::json!({
+            "phase": "walking",
+            "found": 0,
+            "done": 0,
+            "total": 0,
+        }));
+        return scan_steam_games(&app, path);
     }
 
     let depth = max_depth.unwrap_or(3);
     let exe_dir = get_exe_directory()?;
     let mut results = Vec::new();
 
+    // 阶段一：遍历目录收集 exe 文件（全程推送 found 计数）
+    let mut walk_paths = Vec::new();
     for entry in walkdir::WalkDir::new(&dir_path)
         .max_depth(depth)
         .follow_links(false)
@@ -1715,34 +2128,346 @@ fn scan_directory(dir_path: String, max_depth: Option<usize>) -> Result<ScanResu
         if ext != "exe" {
             continue;
         }
-
         let abs_path = path.to_string_lossy().to_string();
-        let name = path.file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("未知")
-            .to_string();
-
-        let (suggested_mode, rel_path) = if let Some(rel) = make_relative_path(&exe_dir, path) {
-            ("relative", rel)
-        } else {
-            ("absolute", String::new())
-        };
-
-        // 尝试提取图标（失败不影响扫描）
-        let icon_path = extract_icon_to_png(&abs_path).unwrap_or_default();
-
-        results.push(ExeInfo {
-            name,
-            icon_path,
-            suggested_path_mode: suggested_mode.to_string(),
-            relative_path: rel_path,
-            absolute_path: abs_path,
-            file_exists: true,
-        });
+        walk_paths.push(abs_path);
+        // 每发现一个 exe 推送一次（前端进度文字「正在扫描目录… 已发现 N 个程序」）
+        let _ = app.emit("scan-progress", serde_json::json!({
+            "phase": "walking",
+            "found": walk_paths.len(),
+            "done": 0,
+            "total": 0,
+        }));
     }
 
-    let total = results.len();
+    let total = walk_paths.len();
+    let mut done = 0usize;
+
+        // 第二阶段：逐条解析名称与相对路径（图标提取移到导入阶段，扫描只收集清单，保证速度）
+        for abs_path in &walk_paths {
+            let path = Path::new(abs_path);
+            let name = path.file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("未知")
+                .to_string();
+
+            let (suggested_mode, rel_path) = if let Some(rel) = make_relative_path(&exe_dir, path) {
+                ("relative", rel)
+            } else {
+                ("absolute", String::new())
+            };
+
+            results.push(ExeInfo {
+                name: name.clone(),
+                icon_path: String::new(),
+                suggested_path_mode: suggested_mode.to_string(),
+                relative_path: rel_path,
+                absolute_path: abs_path.clone(),
+                file_exists: true,
+                steam: None,
+                multi_exe: false,
+                is_primary: true,
+            });
+
+            done += 1;
+            let _ = app.emit("scan-progress", serde_json::json!({
+                "phase": "walking",
+                "found": total,
+                "done": done,
+                "total": total,
+                "current": name,
+            }));
+        }
+
     Ok(ScanResult { results, total })
+}
+
+/// 扫描 Steam 安装目录：解析 steamapps/appmanifest_*.acf，为每个游戏生成一个
+/// ExeInfo（name 用游戏名，absolute_path 用找到的游戏主程序，steam 字段带 appid/
+/// installdir/steam_dir）。扫描阶段不提取图标、不下载封面（保证扫描速度），
+/// 多候选 exe 的游戏逐个展开为多条（multi_exe=true，第一个 is_primary=true）。
+/// 逐游戏推送 scan-progress 事件（phase="icons"，含 done/total 与当前游戏名）。
+fn scan_steam_games(app: &tauri::AppHandle, steam_dir: &Path) -> Result<ScanResult, String> {
+    let steamapps = steam_dir.join("steamapps");
+    let games = read_steam_manifests(&steamapps);
+    let exe_dir = get_exe_directory()?;
+    let mut results = Vec::new();
+
+    let total = games.len();
+    let mut done = 0usize;
+
+    for (appid, name, installdir) in games {
+        let install_dir = steamapps.join("common").join(&installdir);
+        // 找出全部候选 exe：多个时逐个展开为结果条目（前端红色提示用户勾选），
+        // 第一个为主程序（默认选中）；图标提取与封面下载移到导入阶段
+        let all_exes = find_game_exes(&install_dir);
+
+        for (exe_idx, game_exe) in all_exes.iter().enumerate() {
+            let is_primary = exe_idx == 0;
+            let multi_exe = all_exes.len() > 1;
+            // 多 exe 时名称附 exe 名区分（“游戏名 [exe名]”），单 exe 保持游戏名
+            let display_name = if multi_exe {
+                let exe_stem = Path::new(game_exe)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("");
+                format!("{} [{}]", name, exe_stem)
+            } else {
+                name.clone()
+            };
+
+            let (suggested_mode, rel_path) = if !game_exe.is_empty() {
+                if let Some(rel) = make_relative_path(&exe_dir, Path::new(game_exe)) {
+                    ("relative", rel)
+                } else {
+                    ("absolute", String::new())
+                }
+            } else {
+                ("absolute", String::new())
+            };
+
+            results.push(ExeInfo {
+                name: display_name,
+                icon_path: String::new(),
+                suggested_path_mode: suggested_mode.to_string(),
+                relative_path: rel_path,
+                absolute_path: game_exe.clone(),
+                file_exists: !game_exe.is_empty(),
+                steam: Some(SteamGameInfo {
+                    app_id: appid.clone(),
+                    install_dir: installdir.clone(),
+                    exe_path: game_exe.clone(),
+                    cover_path: String::new(),
+                    steam_dir: steam_dir.to_string_lossy().to_string(),
+                }),
+                multi_exe,
+                is_primary,
+            });
+        }
+
+        done += 1;
+        let _ = app.emit("scan-progress", serde_json::json!({
+            "phase": "icons",
+            "found": total,
+            "done": done,
+            "total": total,
+            "current": name,
+        }));
+    }
+
+    Ok(ScanResult { results, total })
+}
+
+// ─── 扫描结果导入（多线程） ───
+
+/// 批量导入扫描结果的整体统计（后端命令返回值）
+#[derive(Debug, Clone, Serialize)]
+struct ImportScanSummary {
+    pub total: usize,
+    pub success: usize,
+    pub failed: usize,
+    /// 新导入并已写盘的 Entry（含 id，前端直接同步内存状态）
+    pub entries: Vec<Entry>,
+}
+
+/// 批量导入扫描结果：多线程提取图标（程序/Steam 通用）、下载 Steam 封面，
+/// 构造 Entry 后统一追加写盘一次（避免前端逐条串行）。
+/// 线程模型与 batch_refresh_icons 一致（std::thread，线程数 = min(条目数, 8)）。
+/// 逐条推送 import-progress 事件（payload：done/total/name/status/message）。
+#[command]
+fn import_scan_items(
+    app: tauri::AppHandle,
+    items: Vec<ExeInfo>,
+    category_id: String,
+    current_env_id: String,
+) -> Result<ImportScanSummary, String> {
+    use std::sync::{Arc, Mutex};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let total = items.len();
+    if total == 0 {
+        return Ok(ImportScanSummary { total: 0, success: 0, failed: 0, entries: Vec::new() });
+    }
+
+    let indexed: Vec<(usize, ExeInfo)> = items.into_iter().enumerate().collect();
+    let results: Arc<Mutex<Vec<(usize, Entry)>>> = Arc::new(Mutex::new(Vec::with_capacity(total)));
+    let failed_flags: Arc<Mutex<Vec<(usize, String)>>> = Arc::new(Mutex::new(Vec::new()));
+    let done_count = Arc::new(AtomicUsize::new(0));
+
+    // 线程数：条目数与 8 取小（COM/Shell 图标提取与 CDN 下载较重，过多线程收益递减）
+    let thread_num = total.min(8).max(1);
+    let chunk_size = (total + thread_num - 1) / thread_num;
+
+    let mut handles = Vec::new();
+    for chunk in indexed.chunks(chunk_size) {
+        let results = Arc::clone(&results);
+        let failed_flags = Arc::clone(&failed_flags);
+        let done_count = Arc::clone(&done_count);
+        let category_id = category_id.clone();
+        let env_id = current_env_id.clone();
+        let app = app.clone();
+        let chunk_vec = chunk.to_vec();
+        handles.push(std::thread::spawn(move || {
+            for (idx, item) in chunk_vec {
+                // COM 初始化：extract_icon_image 内部每次调用 com_init()，
+                // 各工作线程独立初始化，无需额外处理
+                let steam = item.steam.clone();
+                let exe_path = steam.as_ref()
+                    .map(|s| s.exe_path.clone())
+                    .unwrap_or_else(|| item.absolute_path.clone());
+
+                // 图标提取（失败不影响导入，使用默认图标）
+                let icon_path = if exe_path.is_empty() {
+                    String::new()
+                } else {
+                    extract_icon_to_png(&exe_path).unwrap_or_default()
+                };
+
+                // Steam 封面（本地缓存优先，缺失走 CDN；已有目标文件直接复用）
+                let cover_path = if let Some(s) = &steam {
+                    if s.steam_dir.is_empty() {
+                        String::new()
+                    } else {
+                        get_steam_cover(Path::new(&s.steam_dir), &s.app_id)
+                    }
+                } else {
+                    String::new()
+                };
+
+                let now = get_now_iso();
+                let mut failed_msg = String::new();
+
+                let entry = if let Some(s) = &steam {
+                    if exe_path.is_empty() {
+                        failed_msg = "游戏 exe 路径为空".to_string();
+                    }
+                    Entry {
+                        id: String::new(),
+                        name: item.name.clone(),
+                        entry_type: "steam".to_string(),
+                        category_id: category_id.clone(),
+                        relative_path: String::new(),
+                        absolute_paths: if exe_path.is_empty() {
+                            HashMap::new()
+                        } else {
+                            let mut m = HashMap::new();
+                            m.insert(env_id.clone(), exe_path.clone());
+                            m
+                        },
+                        path_mode: "absolute".to_string(),
+                        launch_args: String::new(),
+                        working_directory: String::new(),
+                        window_style: "normal".to_string(),
+                        run_as_admin: false,
+                        url: format!("steam://rungameid/{}", s.app_id),
+                        icon: if icon_path.is_empty() {
+                            ImageResource { res_type: "default".to_string(), source: String::new() }
+                        } else {
+                            ImageResource { res_type: "extracted".to_string(), source: icon_path.clone() }
+                        },
+                        cover: if cover_path.is_empty() {
+                            CoverResource { enabled: false, source: String::new() }
+                        } else {
+                            CoverResource { enabled: true, source: cover_path }
+                        },
+                        tags: Vec::new(),
+                        notes: String::new(),
+                        last_used: String::new(),
+                        add_time: now,
+                    }
+                } else {
+                    if item.absolute_path.is_empty() {
+                        failed_msg = "程序路径为空".to_string();
+                    }
+                    Entry {
+                        id: String::new(),
+                        name: item.name.clone(),
+                        entry_type: "program".to_string(),
+                        category_id: category_id.clone(),
+                        relative_path: item.relative_path.clone(),
+                        absolute_paths: if item.suggested_path_mode == "absolute" && !item.absolute_path.is_empty() {
+                            let mut m = HashMap::new();
+                            m.insert(env_id.clone(), item.absolute_path.clone());
+                            m
+                        } else {
+                            HashMap::new()
+                        },
+                        path_mode: item.suggested_path_mode.clone(),
+                        launch_args: String::new(),
+                        working_directory: String::new(),
+                        window_style: "normal".to_string(),
+                        run_as_admin: false,
+                        url: String::new(),
+                        icon: if icon_path.is_empty() {
+                            ImageResource { res_type: "default".to_string(), source: String::new() }
+                        } else {
+                            ImageResource { res_type: "extracted".to_string(), source: icon_path.clone() }
+                        },
+                        cover: CoverResource { enabled: false, source: String::new() },
+                        tags: Vec::new(),
+                        notes: String::new(),
+                        last_used: String::new(),
+                        add_time: now,
+                    }
+                };
+
+                let status = if failed_msg.is_empty() { "success" } else { "failed" };
+                let message = if !failed_msg.is_empty() {
+                    failed_msg.clone()
+                } else if icon_path.is_empty() && !exe_path.is_empty() {
+                    "图标提取失败，使用默认图标".to_string()
+                } else {
+                    String::new()
+                };
+
+                if failed_msg.is_empty() {
+                    let mut list = results.lock().unwrap();
+                    list.push((idx, entry));
+                } else {
+                    let mut list = failed_flags.lock().unwrap();
+                    list.push((idx, failed_msg));
+                }
+
+                let done = done_count.fetch_add(1, Ordering::SeqCst) + 1;
+                // 逐条推送进度（前端导入进度弹窗实时展示）
+                let _ = app.emit("import-progress", serde_json::json!({
+                    "done": done,
+                    "total": total,
+                    "name": item.name,
+                    "status": status,
+                    "message": message,
+                }));
+            }
+        }));
+    }
+    for h in handles {
+        let _ = h.join();
+    }
+
+    // 汇总：按输入顺序排列，统一分配 id 后追加写盘一次
+    let mut new_entries = Arc::try_unwrap(results)
+        .map_err(|_| "结果收集失败".to_string())?
+        .into_inner()
+        .unwrap();
+    new_entries.sort_by_key(|(idx, _)| *idx);
+    let mut new_entries: Vec<Entry> = new_entries.into_iter().map(|(_, e)| e).collect();
+
+    let data_dir = get_data_dir()?;
+    let entries_path = data_dir.join("entries.json");
+    let mut existing: Vec<Entry> = read_json_file(&entries_path).unwrap_or_default();
+    let mut next_id = existing.iter()
+        .filter_map(|e| e.id.strip_prefix("entry_").and_then(|s| s.parse::<u32>().ok()))
+        .max()
+        .unwrap_or(0) + 1;
+    for e in &mut new_entries {
+        e.id = format!("entry_{}", next_id);
+        next_id += 1;
+    }
+    let success = new_entries.len();
+    existing.append(&mut new_entries);
+    write_json_file(&entries_path, &existing)?;
+
+    let failed = total - success;
+    Ok(ImportScanSummary { total, success, failed, entries: existing[existing.len() - success..].to_vec() })
 }
 
 // ─── 路径模式转换 ───
@@ -2423,6 +3148,7 @@ fn find_orphan_assets() -> Result<(Vec<std::path::PathBuf>, u64), String> {
         "icons/bookmarks",
         "icons/file_cache",
         "covers/custom",
+        "covers/steam",
         "logo",
     ];
 
@@ -2584,12 +3310,13 @@ fn cleanup_deleted_assets(sources: Vec<String>) -> Result<usize, String> {
     }
 
     // 白名单前缀：只允许删 assets 下资源目录内的文件，防误传任意路径
-    const ALLOWED_PREFIXES: [&str; 6] = [
+    const ALLOWED_PREFIXES: [&str; 7] = [
         "assets/icons/extracted/",
         "assets/icons/custom/",
         "assets/icons/bookmarks/",
         "assets/icons/file_cache/",
         "assets/covers/custom/",
+        "assets/covers/steam/",
         "assets/logo/",
     ];
 
@@ -2950,6 +3677,8 @@ pub fn run() {
             get_file_info,
             resolve_lnk,
             scan_directory,
+            scan_steam_app,
+            import_scan_items,
             convert_path_mode,
             copy_file_to_assets,
             fetch_favicon,

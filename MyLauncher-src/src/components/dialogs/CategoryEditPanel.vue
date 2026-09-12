@@ -102,6 +102,7 @@ const syncChildren = defineModel<boolean>('syncChildren', { default: false })
           <option value="horizontal_card">横向卡片</option>
           <option value="icon_grid">图标平铺</option>
           <option value="table">表格列表</option>
+          <option value="waterfall">瀑布流</option>
         </select>
       </div>
       <div class="form-row sync-row" v-if="!isNew">

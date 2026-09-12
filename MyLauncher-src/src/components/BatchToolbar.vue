@@ -34,6 +34,7 @@ async function batchDelete() {
   const ids = Array.from(state.selectedIds)
   await deleteEntries(ids)
   state.selectedIds.clear()
+  exitBatchMode()
 }
 
 async function batchMove(categoryId: string) {
@@ -42,6 +43,7 @@ async function batchMove(categoryId: string) {
   const ids = Array.from(state.selectedIds)
   await moveEntriesToCategory(ids, categoryId)
   state.selectedIds.clear()
+  exitBatchMode()
 }
 
 /** 批量启动：逐条启动选中条目（复用单条启动逻辑，路径失效/启动失败记入提示） */
@@ -54,8 +56,9 @@ async function batchLaunch() {
   convertMsg.value = result.failed > 0
     ? `成功 ${result.success} 项，失败 ${result.failed} 项${result.skipped > 0 ? `，跳过 ${result.skipped} 项` : ''}：\n${result.messages.join('\n')}`
     : `已启动 ${result.success} 项${result.skipped > 0 ? `，跳过 ${result.skipped} 项` : ''}`
-  setTimeout(() => { convertMsg.value = '' }, 3000)
   converting.value = false
+  exitBatchMode()
+  setTimeout(() => { convertMsg.value = '' }, 3000)
 }
 
 async function batchConvertPath(targetMode: 'relative' | 'absolute') {
@@ -66,6 +69,7 @@ async function batchConvertPath(targetMode: 'relative' | 'absolute') {
   const result = await convertEntriesPathMode(ids, targetMode)
   showResult(`所选条目均为${targetMode === 'relative' ? '相对' : '绝对'}路径，无需转换`, result)
   converting.value = false
+  exitBatchMode()
 }
 
 // 批量重新提取图标（重新读取目标文件/网址，提取最新图标）
@@ -83,11 +87,13 @@ async function batchRefreshIcons() {
   const result = await refreshEntriesIcons(ids)
   showResult('所选条目均无需重新提取', result)
   converting.value = false
+  exitBatchMode()
 }
 
-/** 进度对话框关闭后的汇总提示 */
+/** 进度对话框关闭后的汇总提示 + 自动退出批量模式 */
 function onBatchIconDialogClosed() {
   showBatchIconDialog.value = false
+  exitBatchMode()
 }
 
 /** 统一展示批量操作结果（3 秒后消失） */

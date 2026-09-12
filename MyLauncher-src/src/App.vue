@@ -7,6 +7,7 @@ import VerticalCardView from '@/components/views/VerticalCardView.vue'
 import HorizontalCardView from '@/components/views/HorizontalCardView.vue'
 import IconGridView from '@/components/views/IconGridView.vue'
 import TableView from '@/components/views/TableView.vue'
+import WaterfallView from '@/components/views/WaterfallView.vue'
 import EntryEditor from '@/components/dialogs/EntryEditor.vue'
 import EnvironmentManager from '@/components/dialogs/EnvironmentManager.vue'
 import CategoryManager from '@/components/dialogs/CategoryManager.vue'
@@ -18,7 +19,7 @@ import AboutDialog from '@/components/dialogs/AboutDialog.vue'
 import BatchToolbar from '@/components/BatchToolbar.vue'
 import ContextMenu, { type MenuItem } from '@/components/ContextMenu.vue'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import { state, initStore, getCurrentEntries, getCurrentCategory, getCategoryById, getSubCategories, updateCategory, createEntryDraft, initTheme } from '@/store'
+import { state, initStore, getCurrentEntries, getCurrentCategory, getCategoryById, getSubCategories, updateCategory, createEntryDraft, initTheme, saveSettings } from '@/store'
 import { updateLastUsed, addEntry, deleteEntries } from '@/store'
 import * as api from '@/api'
 import type { Entry, EntryType } from '@/types'
@@ -61,6 +62,25 @@ const hasSubCategories = computed(() => {
   return getSubCategories(cat.id).length > 0
 })
 
+// ─── 侧导航折叠 ───
+
+/** 侧导航当前是否折叠（隐藏），来自已持久化配置 */
+const sidebarCollapsed = computed(() => state.config.sidebar_collapsed)
+
+/** 折叠/展开侧导航：点击立即持久化 */
+async function toggleSidebar() {
+  const next = !sidebarCollapsed.value
+  state.config.sidebar_collapsed = next
+  try {
+    await saveSettings({ sidebar_collapsed: next })
+  } catch (e) {
+    console.error('保存侧导航折叠状态失败', e)
+  }
+}
+
+/** 侧导航是否应显示（有子分类且未折叠） */
+const showSidebar = computed(() => hasSubCategories.value && !sidebarCollapsed.value)
+
 const currentViewMode = computed(() => {
   return currentCategory.value?.view_mode || 'icon_grid'
 })
@@ -70,6 +90,7 @@ const viewComponent = computed<Component>(() => {
     case 'vertical_card': return VerticalCardView
     case 'horizontal_card': return HorizontalCardView
     case 'icon_grid': return IconGridView
+    case 'waterfall': return WaterfallView
     default: return TableView
   }
 })
@@ -90,7 +111,7 @@ function switchViewMode(mode: string) {
 
 // 路径状态检查
 async function refreshPathStatus() {
-  const entries = currentEntries.value.filter(e => e.type === 'program' || e.type === 'folder' || e.type === 'file')
+  const entries = currentEntries.value.filter(e => e.type === 'program' || e.type === 'folder' || e.type === 'file' || e.type === 'steam')
   if (entries.length === 0) return
   try {
     const results = await api.check_paths_batch(entries, state.currentEnvId)
@@ -104,6 +125,12 @@ async function refreshPathStatus() {
 
 // 启动条目
 async function handleLaunch(entry: Entry) {
+  // Steam 游戏条目：弹窗让用户选择启动方式（Steam 协议 / 直接启动 exe）
+  if (entry.type === 'steam') {
+    steamChoiceEntry.value = entry
+    showSteamChoiceDialog.value = true
+    return
+  }
   if (entry.type === 'url') {
     const success = await api.launch_program(entry, state.currentEnvId)
     if (success) {
@@ -128,6 +155,51 @@ async function handleLaunch(entry: Entry) {
   }
 }
 
+// Steam 启动方式选择弹窗
+const showSteamChoiceDialog = ref(false)
+const steamChoiceEntry = ref<Entry | null>(null)
+
+// 执行 Steam 游戏启动（按用户选择的方式）
+async function launchSteamGame(mode: 'steam' | 'exe') {
+  const entry = steamChoiceEntry.value
+  showSteamChoiceDialog.value = false
+  if (!entry) return
+
+  if (mode === 'steam') {
+    // 直接用原条目（url = steam://rungameid/{appid}）启动
+    const success = await api.launch_program(entry, state.currentEnvId)
+    if (success) {
+      await updateLastUsed(entry.id)
+      showToast(`已启动: ${entry.name}`)
+    } else {
+      showToast(`启动失败: ${entry.name}`)
+    }
+    return
+  }
+
+  // exe 方式：条目 absolute_paths 中保存了游戏 exe 路径（导入时存入），
+  // 构造临时 program 条目直接启动 exe
+  const exePath = Object.values(entry.absolute_paths)[0] || ''
+  if (!exePath) {
+    showToast(`游戏路径未保存: ${entry.name}`)
+    return
+  }
+  const proxyEntry: Entry = {
+    ...entry,
+    type: 'program',
+    path_mode: 'absolute',
+    relative_path: '',
+    absolute_paths: { [state.currentEnvId]: exePath },
+  }
+  const success = await api.launch_program(proxyEntry, state.currentEnvId)
+  if (success) {
+    await updateLastUsed(entry.id)
+    showToast(`已启动: ${entry.name}`)
+  } else {
+    showToast(`启动失败: ${entry.name}`)
+  }
+}
+
 // 编辑条目
 function handleEditEntry(entry: Entry) {
   editingEntry.value = entry
@@ -138,9 +210,10 @@ function handleEditEntry(entry: Entry) {
 // 右键菜单状态
 const contextMenu = ref<{ x: number; y: number; items: MenuItem[] } | null>(null)
 
-// 有文件路径的类型（网址/系统功能/APPX 不显示「目录」）
+// 有文件路径的类型（网址/系统功能/APPX 不显示「目录」；Steam 游戏定位到游戏 exe）
 function hasFilePath(entry: Entry): boolean {
   return entry.type === 'program' || entry.type === 'folder' || entry.type === 'file'
+    || (entry.type === 'steam' && !!Object.values(entry.absolute_paths)[0])
 }
 
 // 打开条目所在目录（资源管理器定位并选中）
@@ -240,7 +313,6 @@ function handleSearch(q: string) {
 // 拖拽添加（Tauri 文件拖拽事件）
 // 需求：直接把 exe 拖进软件窗口即可收录
 const dropOverlayVisible = ref(false)
-let dropCounter = 0
 
 async function handleDroppedFiles(paths: string[]) {
   if (paths.length === 0) return
@@ -299,17 +371,22 @@ async function handleDroppedFiles(paths: string[]) {
 }
 
 // 监听 Tauri 窗口拖拽事件
+let dropHideTimer: ReturnType<typeof setTimeout> | null = null
 function setupDragDrop() {
   const win = getCurrentWindow()
   win.onDragDropEvent((event) => {
     if (event.payload.type === 'over') {
-      dropCounter++
       dropOverlayVisible.value = true
+      // 每次 over 刷新兜底定时器
+      if (dropHideTimer) clearTimeout(dropHideTimer)
+      dropHideTimer = setTimeout(() => {
+        dropOverlayVisible.value = false
+      }, 800)
     } else if (event.payload.type === 'leave') {
-      dropCounter = Math.max(0, dropCounter - 1)
-      if (dropCounter === 0) dropOverlayVisible.value = false
+      if (dropHideTimer) clearTimeout(dropHideTimer)
+      dropOverlayVisible.value = false
     } else if (event.payload.type === 'drop') {
-      dropCounter = 0
+      if (dropHideTimer) clearTimeout(dropHideTimer)
       dropOverlayVisible.value = false
       handleDroppedFiles(event.payload.paths)
     }
@@ -351,14 +428,25 @@ onMounted(async () => {
 
     <!-- 主体区域 -->
     <div class="app-body">
-      <!-- 侧导航（一级分类无子分类时隐藏） -->
-      <aside class="app-sidebar" v-if="hasSubCategories">
+      <!-- 侧导航（一级分类无子分类或已折叠时隐藏） -->
+      <aside class="app-sidebar" v-if="showSidebar">
         <SideNav
           @edit-category="handleEditCategory"
           @add-sub-category="handleAddSubCategory"
           @delete-category="deleteCatId = $event"
         />
       </aside>
+
+      <!-- 侧导航折叠/展开按钮（常驻，位于侧导航右边线上垂直居中） -->
+      <button
+        v-if="hasSubCategories"
+        class="sidebar-toggle"
+        :class="{ 'sidebar-collapsed': !showSidebar }"
+        :title="showSidebar ? '隐藏侧导航' : '显示侧导航'"
+        @click="toggleSidebar"
+      >
+        <span>{{ showSidebar ? '◀' : '▶' }}</span>
+      </button>
 
       <!-- 内容区 -->
       <main class="app-content">
@@ -441,6 +529,29 @@ onMounted(async () => {
       @close="showScanDialog = false"
       @scanned="refreshPathStatus"
     />
+    <!-- Steam 启动方式选择弹窗 -->
+    <div class="dialog-overlay" v-if="showSteamChoiceDialog" @click.self="showSteamChoiceDialog = false">
+      <div class="dialog steam-choice-dialog">
+        <div class="dialog-header">
+          <span>启动方式</span>
+          <button class="btn btn-icon" @click="showSteamChoiceDialog = false">✕</button>
+        </div>
+        <div class="dialog-body">
+          <p class="steam-choice-title">{{ steamChoiceEntry?.name }}</p>
+          <p class="steam-choice-tip">请选择该 Steam 游戏的启动方式</p>
+          <div class="steam-choice-buttons">
+            <button class="btn steam-choice-btn" @click="launchSteamGame('steam')">
+              <span class="steam-choice-btn-title">Steam 启动</span>
+              <span class="steam-choice-btn-desc">通过 steam:// 协议唤起 Steam 客户端启动（推荐，兼容 DRM）</span>
+            </button>
+            <button class="btn steam-choice-btn" @click="launchSteamGame('exe')">
+              <span class="steam-choice-btn-title">直接启动 exe</span>
+              <span class="steam-choice-btn-desc">直接运行游戏主程序，部分依赖 Steam 环境的游戏可能失败</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
     <BookmarkImportDialog
       v-if="showBookmarkDialog"
       @close="showBookmarkDialog = false"
@@ -495,6 +606,7 @@ onMounted(async () => {
   flex: 1;
   display: flex;
   overflow: hidden;
+  position: relative;
 }
 
 .app-sidebar {
@@ -503,6 +615,42 @@ onMounted(async () => {
   background: var(--gradient-nav);
   border-right: 1px solid var(--color-border);
   overflow-y: auto;
+}
+
+/* 侧导航折叠/展开按钮：贴在侧导航右边线，垂直居中 */
+.sidebar-toggle {
+  position: absolute;
+  top: 50%;
+  left: 180px;
+  transform: translateY(-50%);
+  z-index: 30;
+  width: 18px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--color-border);
+  border-left: none;
+  border-radius: 0 6px 6px 0;
+  background: var(--color-bg-card, var(--color-bg));
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: background var(--transition), color var(--transition);
+  font-size: 10px;
+  line-height: 1;
+}
+
+.sidebar-toggle:hover {
+  background: var(--color-primary);
+  color: #fff;
+}
+
+/* 已折叠时贴左边缘 */
+.sidebar-toggle.sidebar-collapsed {
+  left: 0;
+  border-left: 1px solid var(--color-border);
+  border-radius: 0 6px 6px 0;
 }
 
 .app-footer {
@@ -515,6 +663,8 @@ onMounted(async () => {
   padding: 16px 20px;
   display: flex;
   flex-direction: column;
+  /* 容器查询：子级按内容区实际宽度响应（自动扣除侧导航宽度） */
+  container-type: inline-size;
 }
 
 .loading-screen {
@@ -524,6 +674,54 @@ onMounted(async () => {
   align-items: center;
   justify-content: center;
   gap: 16px;
+}
+
+/* Steam 启动方式选择弹窗 */
+.steam-choice-dialog {
+  width: 420px;
+}
+
+.steam-choice-title {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0 0 4px;
+}
+
+.steam-choice-tip {
+  font-size: 12px;
+  color: var(--color-text-tertiary);
+  margin: 0 0 16px;
+}
+
+.steam-choice-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.steam-choice-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 12px 16px;
+  text-align: left;
+}
+
+.steam-choice-btn:hover {
+  border-color: var(--color-primary);
+  background: var(--color-primary-bg);
+}
+
+.steam-choice-btn-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.steam-choice-btn-desc {
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  font-weight: 400;
 }
 
 .loading-spinner {

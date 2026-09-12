@@ -47,6 +47,7 @@ const viewModes = [
   { id: 'horizontal_card', icon: '▭', label: '横向卡片' },
   { id: 'icon_grid', icon: '⊞', label: '图标平铺' },
   { id: 'table', icon: '☰', label: '表格列表' },
+  { id: 'waterfall', icon: '⬓', label: '瀑布流' },
 ]
 
 // 菜单展开状态

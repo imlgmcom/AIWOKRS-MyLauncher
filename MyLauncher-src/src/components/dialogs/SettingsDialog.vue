@@ -24,7 +24,14 @@ const form = ref({
   // 开机自启（保存时写入注册表）
   autorun: false,
   autorun_silent: false,
+  // 竖向卡片封面宽高比例
+  card_cover_ratio: state.config.card_cover_ratio || '16:9',
+  // 瀑布流封面最大高度（px）
+  masonry_max_height: typeof state.config.masonry_max_height === 'number' && state.config.masonry_max_height > 0 ? state.config.masonry_max_height : 480,
 })
+
+// 竖向卡片封面比例档位
+const coverRatioOptions = ['16:9', '4:3', '1:1', '3:4', '9:16']
 
 // 加载时从注册表读实际自启状态（非前端内存）
 onMounted(async () => {
@@ -179,6 +186,8 @@ async function save() {
       close_action: form.value.close_action,
       custom_emojis: form.value.custom_emojis,
       favicon_api_sources: favicon_sources,
+      card_cover_ratio: form.value.card_cover_ratio,
+      masonry_max_height: form.value.masonry_max_height,
     })
     emit('close')
   } catch (e) {
@@ -342,6 +351,22 @@ async function cleanAssets() {
               </span>
             </label>
           </div>
+        </div>
+
+        <!-- 列表展示 -->
+        <div class="section-title">列表展示</div>
+        <div class="setting-group">
+          <div class="form-row">
+            <label class="form-label">竖向卡片封面比例</label>
+            <select v-model="form.card_cover_ratio" class="select">
+              <option v-for="r in coverRatioOptions" :key="r" :value="r">{{ r }}</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label class="form-label">瀑布流封面最大高度</label>
+            <input v-model.number="form.masonry_max_height" type="number" min="120" max="960" step="10" class="input" />
+          </div>
+          <div class="form-hint">竖向卡片封面按所选比例显示；瀑布流中单张封面最高不超过设定高度（px）。</div>
         </div>
 
         <!-- 开机自启 -->

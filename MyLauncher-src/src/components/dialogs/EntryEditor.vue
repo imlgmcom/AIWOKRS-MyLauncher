@@ -19,7 +19,7 @@ const emit = defineEmits<{
   (e: 'saved'): void
 }>()
 
-/** 六种类型的展示信息 */
+/** 七种类型的展示信息 */
 const TYPE_OPTIONS: { value: EntryType; label: string; icon: string }[] = [
   { value: 'program', label: '程序', icon: '📦' },
   { value: 'url', label: '网址', icon: '🌐' },
@@ -27,6 +27,7 @@ const TYPE_OPTIONS: { value: EntryType; label: string; icon: string }[] = [
   { value: 'file', label: '文件', icon: '📄' },
   { value: 'system', label: '系统功能', icon: '🛠️' },
   { value: 'appx', label: 'APPX 应用', icon: '🏪' },
+  { value: 'steam', label: 'Steam 游戏', icon: '🎮' },
 ]
 
 function typeLabel(type: EntryType): string {
@@ -55,7 +56,9 @@ function openSystemPicker() {
 // ─── 旧数据类型自动纠正 ───
 // 早期版本把系统功能/APPX 存为 program 类型（目标存 relative_path），
 // 编辑时按目标前缀识别真实类型并纠正，保存后即持久化为正确类型
+// 旧版 Steam 扫描导入的条目为 url 类型（url 以 steam://rungameid/ 开头），同样纠正为 steam
 function correctLegacyType(e: Entry): EntryType {
+  if (e.type === 'url' && e.url.toLowerCase().startsWith('steam://rungameid/')) return 'steam'
   if (e.type !== 'program') return e.type
   const t = e.relative_path?.trim() || ''
   if (t.toLowerCase().startsWith('shell:appsfolder')) return 'appx'
@@ -184,13 +187,57 @@ async function pickPath() {
   }
 }
 
-// 自定义图标
+// 自定义图标（可选图片或 exe/快捷方式，exe 提取其图标；初始目录定位到条目程序所在目录）
 async function pickIcon() {
-  const relPath = await pickAndCopyImage('icons/custom', ['png', 'jpg', 'jpeg', 'ico', 'bmp'])
-  if (relPath) {
-    form.value.icon = { type: 'custom', source: relPath }
+  const defaultDir = iconPickerDir.value
+  const path = await api.pick_file(
+    [{ name: '图片或程序', extensions: ['png', 'jpg', 'jpeg', 'ico', 'bmp', 'webp', 'exe', 'lnk'] }],
+    defaultDir
+  )
+  if (!path) return
+  if (/\.(exe|lnk)$/i.test(path)) {
+    // exe：提取图标；lnk：解析目标后提取
+    try {
+      const target = /\.lnk$/i.test(path) ? (await api.resolve_lnk(path)).target_path : path
+      if (!target) {
+        error.value = '快捷方式未指向有效程序，无法提取图标'
+        return
+      }
+      const info = await api.get_exe_info(target)
+      if (info.icon_path) {
+        form.value.icon = { type: 'extracted', source: info.icon_path }
+      } else {
+        error.value = '该程序未提取到图标'
+      }
+    } catch (e) {
+      error.value = `提取程序图标失败: ${e}`
+    }
+  } else {
+    const relPath = await api.copy_file_to_assets(path, 'icons/custom')
+    if (relPath) {
+      form.value.icon = { type: 'custom', source: relPath }
+    }
   }
 }
+
+/** 图标浏览初始目录：条目当前解析路径的父目录（程序/文件夹/文件/Steam 游戏 exe） */
+const iconPickerDir = computed(() => {
+  const abs = form.value.absolute_paths[state.currentEnvId] || ''
+  if (abs && /^[A-Za-z]:[\\/]/.test(abs)) {
+    const idx = Math.max(abs.lastIndexOf('\\'), abs.lastIndexOf('/'))
+    return idx > 2 ? abs.slice(0, idx) : ''
+  }
+  if (form.value.relative_path) {
+    // 相对路径 ../ 前缀基于 exe 目录解析
+    const rp = form.value.relative_path.replace(/^([\\/])+/, '')
+    if (rp.startsWith('..')) {
+      const joined = state.exeDir + '\\' + rp
+      const idx = Math.max(joined.lastIndexOf('\\'), joined.lastIndexOf('/'))
+      return idx > 2 ? joined.slice(0, idx) : ''
+    }
+  }
+  return ''
+})
 
 // 封面图
 async function pickCover() {
@@ -203,6 +250,90 @@ async function pickCover() {
 function clearCover() {
   form.value.cover = { enabled: false, source: '' }
 }
+
+// ─── Steam 游戏：按 ID 扫描 ───
+
+const steamAppId = ref('')
+const scanningSteam = ref(false)
+const loadingSteamInfo = ref(false)
+/** 扫描成功后回显的游戏 exe 路径（来自 absolute_paths 当前环境值） */
+const steamExePath = computed(() => form.value.absolute_paths[state.currentEnvId] || '')
+
+// 编辑已有条目时，从启动链接 steam://rungameid/{appid} 提取 ID 回显
+watch(() => form.value.url, (url) => {
+  const m = url?.match(/^steam:\/\/rungameid\/(\d+)/i)
+  if (m) steamAppId.value = m[1]
+}, { immediate: true })
+
+/** 按 ID 扫描 Steam 游戏：回填名称/启动链接/游戏 exe 路径/封面/图标 */
+async function scanSteamApp() {
+  const id = steamAppId.value.trim()
+  if (!id) {
+    error.value = '请输入 Steam 游戏 ID'
+    return
+  }
+  if (!/^\d+$/.test(id)) {
+    error.value = '游戏 ID 应为纯数字（Steam 商店页 URL 中的 appid）'
+    return
+  }
+  error.value = ''
+  scanningSteam.value = true
+  try {
+    const r = await api.scan_steam_app(id)
+    form.value.name = r.name || form.value.name
+    form.value.url = `steam://rungameid/${id}`
+    form.value.absolute_paths = r.exe_path
+      ? { [state.currentEnvId]: r.exe_path }
+      : {}
+    form.value.path_mode = 'absolute'
+    if (r.cover_path) {
+      form.value.cover = { enabled: true, source: r.cover_path }
+    }
+    if (r.icon_path) {
+      form.value.icon = { type: 'extracted', source: r.icon_path }
+    }
+  } catch (e) {
+    error.value = `扫描失败: ${e}`
+  } finally {
+    scanningSteam.value = false
+  }
+}
+
+/** 手动修改启动链接时，同步更新 ID 输入框（保持两者一致） */
+function onSteamUrlInput() {
+  const m = form.value.url.match(/^steam:\/\/rungameid\/(\d+)/i)
+  if (m) steamAppId.value = m[1]
+}
+
+/** 浏览选择 Steam 游戏主程序（仅设置 exe 路径与提取图标，不覆盖名称/启动链接） */
+async function pickSteamExe() {
+  const path = await api.pick_file(
+    [{ name: '程序文件', extensions: ['exe'] }],
+    steamExeDir.value || undefined
+  )
+  if (!path) return
+  loadingSteamInfo.value = true
+  try {
+    const info = await api.get_exe_info(path)
+    form.value.absolute_paths = { [state.currentEnvId]: info.absolute_path }
+    form.value.path_mode = 'absolute'
+    if (info.icon_path) {
+      form.value.icon = { type: 'extracted', source: info.icon_path }
+    }
+  } catch (e) {
+    error.value = `读取游戏程序信息失败: ${e}`
+  } finally {
+    loadingSteamInfo.value = false
+  }
+}
+
+/** 游戏程序浏览初始目录：当前 exe 路径的父目录 */
+const steamExeDir = computed(() => {
+  const abs = steamExePath.value
+  if (!abs || !/^[A-Za-z]:[\\/]/.test(abs)) return ''
+  const idx = Math.max(abs.lastIndexOf('\\'), abs.lastIndexOf('/'))
+  return idx > 2 ? abs.slice(0, idx) : ''
+})
 
 // Favicon 获取
 async function fetchFavicon() {
@@ -289,6 +420,10 @@ async function save() {
     error.value = '请输入网址'
     return
   }
+  if (form.value.type === 'steam' && !form.value.url.trim()) {
+    error.value = '请先输入游戏 ID 并扫描，或手动填写 Steam 启动链接'
+    return
+  }
   if ((form.value.type === 'folder' || form.value.type === 'file') && !form.value.relative_path && Object.keys(form.value.absolute_paths).length === 0) {
     error.value = `请选择${form.value.type === 'folder' ? '文件夹' : '文件'}`
     return
@@ -348,6 +483,7 @@ const refreshIconTitle = computed(() => {
     case 'folder': return '从文件夹重新提取图标'
     case 'file': return '从文件重新提取图标'
     case 'url': return '多源获取网址图标（获取失败时保持原图标）'
+    case 'steam': return '从游戏主程序重新提取图标'
     default: return '重新提取图标'
   }
 })
@@ -409,6 +545,22 @@ watch(() => form.value.type, (newType, oldType) => {
     form.value.launch_args = ''
     form.value.working_directory = ''
     form.value.run_as_admin = false
+  }
+
+  // 切到 Steam 游戏：仅清相对路径类字段（启动链接/exe 路径由 ID 扫描或手动填写回填；启动设置保留，便于从程序类切换时继承）
+  if (newType === 'steam') {
+    form.value.relative_path = ''
+    form.value.path_mode = 'absolute'
+    if (oldType !== 'url' || !form.value.url.toLowerCase().startsWith('steam://rungameid/')) {
+      form.value.url = ''
+    }
+  }
+
+  // 从 Steam 切走：清启动链接与 ID（避免残留 steam:// 到其他类型）
+  if (oldType === 'steam' && newType !== 'steam') {
+    if (form.value.url.toLowerCase().startsWith('steam://rungameid/')) {
+      form.value.url = ''
+    }
   }
 })
 </script>
@@ -505,6 +657,65 @@ watch(() => form.value.type, (newType, oldType) => {
           <div class="form-row">
             <label class="form-label">网址</label>
             <input v-model="form.url" class="input" placeholder="https://..." />
+          </div>
+        </template>
+
+        <!-- Steam 游戏 -->
+        <template v-if="form.type === 'steam'">
+          <div class="form-section">Steam 游戏</div>
+
+          <div class="form-row">
+            <label class="form-label">游戏 ID</label>
+            <div style="display: flex; gap: 4px;">
+              <input v-model="steamAppId" class="input" placeholder="Steam 商店页 URL 中的数字 ID" style="flex: 1;" @keyup.enter="scanSteamApp" />
+              <button class="btn" @click="scanSteamApp" :disabled="scanningSteam">
+                {{ scanningSteam ? '扫描中...' : '扫描' }}
+              </button>
+            </div>
+          </div>
+
+          <div class="form-row">
+            <label class="form-label">启动链接</label>
+            <input v-model="form.url" class="input" placeholder="steam://rungameid/..." @input="onSteamUrlInput" />
+          </div>
+
+          <div class="form-row">
+            <label class="form-label">游戏程序</label>
+            <div style="display: flex; gap: 4px;">
+              <input :value="steamExePath" class="input" placeholder="输入 ID 扫描后自动回填，或浏览选择游戏主程序" style="flex: 1;" readonly />
+              <button class="btn" @click="pickSteamExe" :disabled="loadingSteamInfo">{{ loadingSteamInfo ? '...' : '浏览...' }}</button>
+            </div>
+          </div>
+
+          <div class="form-section">启动设置</div>
+
+          <div class="form-row">
+            <label class="form-label">启动参数</label>
+            <input v-model="form.launch_args" class="input" placeholder="如: -nolauncher（直接启动 exe 方式时生效）" />
+          </div>
+
+          <div class="form-row">
+            <label class="form-label">起始位置</label>
+            <div style="display: flex; gap: 4px;">
+              <input v-model="form.working_directory" class="input" placeholder="留空默认游戏 exe 所在目录" style="flex: 1;" />
+              <button class="btn" @click="pickWorkingDir">浏览...</button>
+            </div>
+          </div>
+
+          <div class="form-row">
+            <label class="form-label">运行方式</label>
+            <select v-model="form.window_style" class="select">
+              <option value="normal">常规窗口</option>
+              <option value="maximized">最大化</option>
+              <option value="minimized">最小化</option>
+            </select>
+          </div>
+
+          <div class="form-row">
+            <label class="form-label">权限</label>
+            <label class="checkbox-label">
+              <input type="checkbox" v-model="form.run_as_admin" /> 以管理员身份运行
+            </label>
           </div>
         </template>
 

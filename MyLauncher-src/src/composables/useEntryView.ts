@@ -47,8 +47,9 @@ export function useEntryView(props: EntryViewProps, emit: EntryViewEmits) {
   }
 
   function pathExists(entry: Entry): boolean {
+    // Steam：后端 resolve 已优先解析 exe 路径，前端同样按 pathStatus 判定
     if (entry.type === 'url' || entry.type === 'system' || entry.type === 'appx') return true
-    // 特殊启动目标（系统功能/APPX 的 URI 或裸命令名）由后端恒判有效，前端兜底不标失效
+    // 特殊启动目标（系统功能/APPX 的 URI 或裸命令名）由后端恒判有效，前端兑底不标失效
     const t = entry.relative_path?.trim() || ''
     if (t.startsWith('shell:') || t.startsWith('ms-settings:')) return true
     if (t && !t.includes('\\') && !t.includes('/') && !t.includes(':')) return true
@@ -62,6 +63,11 @@ export function useEntryView(props: EntryViewProps, emit: EntryViewEmits) {
 
   function hoverTip(entry: Entry): string {
     if (entry.type === 'url') return entry.url || entry.name
+    if (entry.type === 'steam') {
+      // 优先展示游戏 exe 路径，无则展示启动链接
+      const exe = Object.values(entry.absolute_paths || {})[0] || ''
+      return exe || entry.url || entry.name
+    }
     if (entry.type === 'system' || entry.type === 'appx') return entry.relative_path || entry.notes || entry.name
     return entry.notes || entry.name
   }
