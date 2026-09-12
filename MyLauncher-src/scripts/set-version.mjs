@@ -1,6 +1,6 @@
 // ════════════════════════════════════════════
 // 自动版本号：构建前把 tauri.conf.json 的 version 改写为
-//   1.{YY}{MM}{DD}.{HH}{mm}   如 1.260911.1030
+//   yy.M.d  如 26.9.12（无前导零，semver 合法）
 // 由 package.json 的 tauri 脚本自动调用，无需手动改版本号。
 // ════════════════════════════════════════════
 
@@ -12,10 +12,10 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const confPath = join(__dirname, '..', 'src-tauri', 'tauri.conf.json')
 
 const now = new Date()
-const pad = (n) => String(n).padStart(2, '0')
-// HHMM 取整数值去前导零，避免 semver 数字段前导零报错（如 08:13 -> 813）
-const hhmm = now.getHours() * 100 + now.getMinutes()
-const version = `1.${pad(now.getFullYear() % 100)}${pad(now.getMonth() + 1)}${pad(now.getDate())}.${hhmm}`
+const yy = now.getFullYear() % 100
+const M = now.getMonth() + 1
+const d = now.getDate()
+const version = `${yy}.${M}.${d}`
 
 const conf = JSON.parse(readFileSync(confPath, 'utf-8'))
 if (conf.version === version) {
