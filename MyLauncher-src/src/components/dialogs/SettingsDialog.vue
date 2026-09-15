@@ -9,6 +9,15 @@ const emit = defineEmits<{
   (e: 'close'): void
 }>()
 
+// ─── Tab 切换 ───
+type TabId = 'appearance' | 'behavior' | 'advanced' | 'maintenance'
+const activeTab = ref<TabId>('appearance')
+const tabs: { id: TabId; label: string; icon: string }[] = [
+  { id: 'appearance', label: '外观', icon: '◑' },
+  { id: 'behavior', label: '行为', icon: '⚙' },
+  { id: 'advanced', label: '高级', icon: '⚒' },
+  { id: 'maintenance', label: '维护', icon: '◐' },
+]
 
 // 表单（从当前配置初始化）
 const form = ref({
@@ -257,178 +266,204 @@ async function cleanAssets() {
         <button class="btn btn-icon" @click="$emit('close')">✕</button>
       </div>
 
+      <!-- Tab 导航 -->
+      <div class="settings-tabs">
+        <button
+          v-for="tab in tabs"
+          :key="tab.id"
+          class="settings-tab"
+          :class="{ active: activeTab === tab.id }"
+          @click="activeTab = tab.id"
+        >
+          <span class="tab-icon">{{ tab.icon }}</span>
+          <span class="tab-label">{{ tab.label }}</span>
+        </button>
+      </div>
+
       <div class="dialog-body">
-        <!-- LOGO 设置 -->
-        <div class="section-title">LOGO 设置</div>
-        <div class="setting-group">
-          <div class="form-row">
-            <label class="form-label">LOGO 图标</label>
-            <div class="form-control">
-              <IconPicker
-                :current-type="form.logo_icon_type"
-                :current-source="form.logo_icon"
-                upload-dir="icons/custom"
-                :custom-emojis="form.custom_emojis"
-                @select-emoji="selectEmoji"
-                @upload="onIconUploaded"
-              />
-            </div>
-          </div>
-          <div class="form-row">
-            <label class="form-label">LOGO 文字</label>
-            <div class="form-control">
-              <input v-model="form.logo_text" class="input" placeholder="MyLauncher" maxlength="20" />
-              <div class="form-hint">留空恢复默认 "MyLauncher"</div>
-            </div>
-          </div>
-          <div class="form-row">
-            <label class="form-label">LOGO 图片</label>
-            <div class="form-control">
-              <div class="logo-image-row">
-                <button class="btn" @click="pickLogoImage">📁 选择图片</button>
-                <button v-if="form.logo_image" class="btn btn-danger" @click="removeLogoImage">移除</button>
-                <label class="checkbox-label">
-                  <input v-model="form.logo_image_enabled" type="checkbox" :disabled="!form.logo_image" />
-                  启用图片作为 LOGO
-                </label>
+        <!-- ══════════ 外观 ══════════ -->
+        <template v-if="activeTab === 'appearance'">
+          <!-- LOGO 设置 -->
+          <div class="section-title">LOGO 设置</div>
+          <div class="setting-group">
+            <div class="form-row">
+              <label class="form-label">LOGO 图标</label>
+              <div class="form-control">
+                <IconPicker
+                  :current-type="form.logo_icon_type"
+                  :current-source="form.logo_icon"
+                  upload-dir="icons/custom"
+                  :custom-emojis="form.custom_emojis"
+                  @select-emoji="selectEmoji"
+                  @upload="onIconUploaded"
+                />
               </div>
-              <div class="form-hint">启用后 LOGO 区域整体显示为图片；未启用则显示图标 + 文字</div>
-              <!-- 预览（单图铺满，模拟 LOGO 区域实际效果） -->
-              <div v-if="form.logo_image" class="logo-preview" :class="{ disabled: !form.logo_image_enabled }">
-                <div class="logo-preview-box">
-                  <img v-if="logoImagePreview" :src="logoImagePreview" class="logo-preview-img" alt="LOGO 预览" />
+            </div>
+            <div class="form-row">
+              <label class="form-label">LOGO 文字</label>
+              <div class="form-control">
+                <input v-model="form.logo_text" class="input" placeholder="MyLauncher" maxlength="20" />
+                <div class="form-hint">留空恢复默认 "MyLauncher"</div>
+              </div>
+            </div>
+            <div class="form-row">
+              <label class="form-label">LOGO 图片</label>
+              <div class="form-control">
+                <div class="logo-image-row">
+                  <button class="btn" @click="pickLogoImage">📁 选择图片</button>
+                  <button v-if="form.logo_image" class="btn btn-danger" @click="removeLogoImage">移除</button>
+                  <label class="checkbox-label">
+                    <input v-model="form.logo_image_enabled" type="checkbox" :disabled="!form.logo_image" />
+                    启用图片作为 LOGO
+                  </label>
                 </div>
-                <div class="logo-preview-filename">{{ form.logo_image }}</div>
+                <div class="form-hint">启用后 LOGO 区域整体显示为图片；未启用则显示图标 + 文字</div>
+                <!-- 预览（单图铺满，模拟 LOGO 区域实际效果） -->
+                <div v-if="form.logo_image" class="logo-preview" :class="{ disabled: !form.logo_image_enabled }">
+                  <div class="logo-preview-box">
+                    <img v-if="logoImagePreview" :src="logoImagePreview" class="logo-preview-img" alt="LOGO 预览" />
+                  </div>
+                  <div class="logo-preview-filename">{{ form.logo_image }}</div>
+                </div>
               </div>
             </div>
           </div>
-        </div>
 
-        <!-- 自定义 emoji 图标库 -->
-        <div class="section-title">自定义图标库</div>
-        <div class="setting-group">
-          <div class="custom-emoji-hint">从别处复制 emoji，粘贴到下方输入框即可添加到自定义标签页</div>
-          <div class="custom-emoji-input-row">
-            <input
-              v-model="customEmojiInput"
-              class="input"
-              placeholder="在此粘贴 emoji"
-              @keydown.enter.prevent="addCustomEmoji"
-            />
-            <button class="btn" @click="pasteFromClipboard">📋 粘贴</button>
-            <button class="btn btn-primary" @click="addCustomEmoji">添加</button>
+          <!-- 自定义 emoji 图标库 -->
+          <div class="section-title">自定义图标库</div>
+          <div class="setting-group">
+            <div class="custom-emoji-hint">从别处复制 emoji，粘贴到下方输入框即可添加到自定义标签页</div>
+            <div class="custom-emoji-input-row">
+              <input
+                v-model="customEmojiInput"
+                class="input"
+                placeholder="在此粘贴 emoji"
+                @keydown.enter.prevent="addCustomEmoji"
+              />
+              <button class="btn" @click="pasteFromClipboard">📋 粘贴</button>
+              <button class="btn btn-primary" @click="addCustomEmoji">添加</button>
+            </div>
+            <div v-if="form.custom_emojis.length > 0" class="custom-emoji-list">
+              <div
+                v-for="(emoji, i) in form.custom_emojis"
+                :key="i"
+                class="custom-emoji-item"
+                @click="selectEmoji(emoji)"
+              >
+                <span class="custom-emoji-char">{{ emoji }}</span>
+                <button class="custom-emoji-remove" @click.stop="removeCustomEmoji(i)">✕</button>
+              </div>
+            </div>
+            <div v-else class="custom-emoji-empty">暂无自定义 emoji</div>
           </div>
-          <div v-if="form.custom_emojis.length > 0" class="custom-emoji-list">
-            <div
-              v-for="(emoji, i) in form.custom_emojis"
-              :key="i"
-              class="custom-emoji-item"
-              @click="selectEmoji(emoji)"
-            >
-              <span class="custom-emoji-char">{{ emoji }}</span>
-              <button class="custom-emoji-remove" @click.stop="removeCustomEmoji(i)">✕</button>
+
+          <!-- 列表展示 -->
+          <div class="section-title">列表展示</div>
+          <div class="setting-group">
+            <div class="form-row">
+              <label class="form-label">竖向卡片封面比例</label>
+              <select v-model="form.card_cover_ratio" class="select">
+                <option v-for="r in coverRatioOptions" :key="r" :value="r">{{ r }}</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <label class="form-label">瀑布流封面最大高度</label>
+              <input v-model.number="form.masonry_max_height" type="number" min="120" max="960" step="10" class="input" />
+            </div>
+            <div class="form-hint">竖向卡片封面按所选比例显示；瀑布流中单张封面最高不超过设定高度（px）。</div>
+          </div>
+        </template>
+
+        <!-- ══════════ 行为 ══════════ -->
+        <template v-if="activeTab === 'behavior'">
+          <!-- 关闭按钮行为 -->
+          <div class="section-title">关闭按钮</div>
+          <div class="setting-group">
+            <div class="radio-group">
+              <label class="radio-option" :class="{ active: form.close_action === 'tray' }">
+                <input v-model="form.close_action" type="radio" value="tray" />
+                <span class="radio-text">
+                  <span class="radio-title">最小化到托盘</span>
+                  <span class="radio-desc">点击关闭按钮时隐藏窗口，程序保留在系统托盘</span>
+                </span>
+              </label>
+              <label class="radio-option" :class="{ active: form.close_action === 'close' }">
+                <input v-model="form.close_action" type="radio" value="close" />
+                <span class="radio-text">
+                  <span class="radio-title">直接退出程序</span>
+                  <span class="radio-desc">点击关闭按钮时彻底关闭 MyLauncher</span>
+                </span>
+              </label>
             </div>
           </div>
-          <div v-else class="custom-emoji-empty">暂无自定义 emoji</div>
-        </div>
 
-        <!-- 关闭按钮行为 -->
-        <div class="section-title">关闭按钮</div>
-        <div class="setting-group">
-          <div class="radio-group">
-            <label class="radio-option" :class="{ active: form.close_action === 'tray' }">
-              <input v-model="form.close_action" type="radio" value="tray" />
-              <span class="radio-text">
-                <span class="radio-title">最小化到托盘</span>
-                <span class="radio-desc">点击关闭按钮时隐藏窗口，程序保留在系统托盘</span>
-              </span>
+          <!-- 开机自启 -->
+          <div class="section-title">开机自启</div>
+          <div class="setting-group">
+            <label class="checkbox-label">
+              <input v-model="form.autorun" type="checkbox" />
+              开机自动启动 MyLauncher
             </label>
-            <label class="radio-option" :class="{ active: form.close_action === 'close' }">
-              <input v-model="form.close_action" type="radio" value="close" />
-              <span class="radio-text">
-                <span class="radio-title">直接退出程序</span>
-                <span class="radio-desc">点击关闭按钮时彻底关闭 MyLauncher</span>
-              </span>
+            <label class="checkbox-label autorun-sub" :class="{ disabled: !form.autorun }">
+              <input v-model="form.autorun_silent" type="checkbox" :disabled="!form.autorun" />
+              自启时不显示主界面，隐藏在系统托盘
             </label>
+            <div class="form-hint">写入当前用户注册表 Run 键，无需管理员权限；程序移动位置后会自动校正路径</div>
           </div>
-        </div>
+        </template>
 
-        <!-- 列表展示 -->
-        <div class="section-title">列表展示</div>
-        <div class="setting-group">
-          <div class="form-row">
-            <label class="form-label">竖向卡片封面比例</label>
-            <select v-model="form.card_cover_ratio" class="select">
-              <option v-for="r in coverRatioOptions" :key="r" :value="r">{{ r }}</option>
-            </select>
+        <!-- ══════════ 高级 ══════════ -->
+        <template v-if="activeTab === 'advanced'">
+          <!-- Favicon 获取源 -->
+          <div class="section-title">Favicon 获取源</div>
+          <div class="setting-group">
+            <div class="form-hint favicon-hint">
+              获取网址图标使用的 API 模板，一行一个，按顺序尝试（任一成功即用）。占位符：{url} 完整链接、{domain} 域名、{scheme} 协议。API 失效时可自行替换
+            </div>
+            <textarea
+              v-model="form.favicon_api_sources_text"
+              class="textarea favicon-textarea"
+              rows="4"
+              spellcheck="false"
+              placeholder="https://a.favicon.im/{url}?larger=true"
+            ></textarea>
+            <div class="favicon-actions">
+              <button class="btn" @click="resetFaviconApiSources">恢复默认</button>
+            </div>
           </div>
-          <div class="form-row">
-            <label class="form-label">瀑布流封面最大高度</label>
-            <input v-model.number="form.masonry_max_height" type="number" min="120" max="960" step="10" class="input" />
-          </div>
-          <div class="form-hint">竖向卡片封面按所选比例显示；瀑布流中单张封面最高不超过设定高度（px）。</div>
-        </div>
+        </template>
 
-        <!-- 开机自启 -->
-        <div class="section-title">开机自启</div>
-        <div class="setting-group">
-          <label class="checkbox-label">
-            <input v-model="form.autorun" type="checkbox" />
-            开机自动启动 MyLauncher
-          </label>
-          <label class="checkbox-label autorun-sub" :class="{ disabled: !form.autorun }">
-            <input v-model="form.autorun_silent" type="checkbox" :disabled="!form.autorun" />
-            自启时不显示主界面，隐藏在系统托盘
-          </label>
-          <div class="form-hint">写入当前用户注册表 Run 键，无需管理员权限；程序移动位置后会自动校正路径</div>
-        </div>
-
-        <!-- Favicon 获取源 -->
-        <div class="section-title">Favicon 获取源</div>
-        <div class="setting-group">
-          <div class="form-hint favicon-hint">
-            获取网址图标使用的 API 模板，一行一个，按顺序尝试（任一成功即用）。占位符：{url} 完整链接、{domain} 域名、{scheme} 协议。API 失效时可自行替换
+        <!-- ══════════ 维护 ══════════ -->
+        <template v-if="activeTab === 'maintenance'">
+          <!-- 过期资源清理 -->
+          <div class="section-title">资源清理</div>
+          <div class="setting-group">
+            <div class="form-hint clean-hint">
+              清理图标、封面等资源中未被任何条目、分类或 LOGO 引用的过期文件（如目录扫描、书签导入后未使用的图标），文件将移入回收站
+            </div>
+            <div class="clean-actions">
+              <button class="btn" :disabled="cleaning" @click="scanAssets">
+                {{ cleaning ? '处理中...' : '🔍 扫描' }}
+              </button>
+              <button
+                v-if="scanResult && scanResult.count > 0"
+                class="btn btn-danger"
+                :disabled="cleaning"
+                @click="cleanAssets"
+              >
+                🗑 清理
+              </button>
+            </div>
+            <div v-if="scanResult" class="clean-result" :class="{ empty: scanResult.count === 0 }">
+              <template v-if="scanResult.count > 0">
+                发现 <b>{{ scanResult.count }}</b> 个过期文件，共 <b>{{ scanResult.sizeText }}</b>
+              </template>
+              <template v-else>
+                没有过期文件，资源均已使用
+              </template>
+            </div>
           </div>
-          <textarea
-            v-model="form.favicon_api_sources_text"
-            class="textarea favicon-textarea"
-            rows="4"
-            spellcheck="false"
-            placeholder="https://a.favicon.im/{url}?larger=true"
-          ></textarea>
-          <div class="favicon-actions">
-            <button class="btn" @click="resetFaviconApiSources">恢复默认</button>
-          </div>
-        </div>
-
-        <!-- 过期资源清理 -->
-        <div class="section-title">资源清理</div>
-        <div class="setting-group">
-          <div class="form-hint clean-hint">
-            清理图标、封面等资源中未被任何条目、分类或 LOGO 引用的过期文件（如目录扫描、书签导入后未使用的图标），文件将移入回收站
-          </div>
-          <div class="clean-actions">
-            <button class="btn" :disabled="cleaning" @click="scanAssets">
-              {{ cleaning ? '处理中...' : '🔍 扫描' }}
-            </button>
-            <button
-              v-if="scanResult && scanResult.count > 0"
-              class="btn btn-danger"
-              :disabled="cleaning"
-              @click="cleanAssets"
-            >
-              🗑 清理
-            </button>
-          </div>
-          <div v-if="scanResult" class="clean-result" :class="{ empty: scanResult.count === 0 }">
-            <template v-if="scanResult.count > 0">
-              发现 <b>{{ scanResult.count }}</b> 个过期文件，共 <b>{{ scanResult.sizeText }}</b>
-            </template>
-            <template v-else>
-              没有过期文件，资源均已使用
-            </template>
-          </div>
-        </div>
+        </template>
       </div>
 
       <div class="dialog-footer">
@@ -442,7 +477,51 @@ async function cleanAssets() {
 
 <style scoped>
 .settings-dialog {
-  width: 480px;
+  width: 560px;
+}
+
+/* ─── Tab 导航 ─── */
+.settings-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--color-border);
+  padding: 0 4px;
+}
+
+.settings-tab {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px 4px;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  border-bottom: 2px solid transparent;
+  transition: all var(--transition);
+  border-radius: 0;
+}
+
+.settings-tab:hover {
+  color: var(--color-text);
+  background: var(--color-bg-hover);
+}
+
+.settings-tab.active {
+  color: var(--color-primary);
+  border-bottom-color: var(--color-primary);
+  font-weight: 600;
+}
+
+.tab-icon {
+  font-size: 14px;
+  line-height: 1;
+}
+
+.tab-label {
+  font-size: 13px;
 }
 
 .setting-group {
@@ -723,4 +802,3 @@ async function cleanAssets() {
 }
 
 </style>
-
