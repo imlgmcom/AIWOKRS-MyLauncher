@@ -7,7 +7,7 @@ import { state } from '@/store'
 const props = defineProps<{
   editing: Category | null
   isNew: boolean
-  form: { name: string; parent_id: string | null; view_mode: ViewMode }
+  form: { name: string; parent_id: string | null; view_mode: ViewMode; hidden: boolean }
   categories: Category[]
   pendingIcon: { type: 'emoji' | 'custom'; source: string } | null
 }>()
@@ -110,6 +110,13 @@ const syncChildren = defineModel<boolean>('syncChildren', { default: false })
         <label class="sync-check">
           <input type="checkbox" v-model="syncChildren" />
           <span>同步显示模式到所有子分类</span>
+        </label>
+      </div>
+      <div class="form-row">
+        <label class="form-label"></label>
+        <label class="sync-check" title="勾选后该分类在前台不显示；LOGO 三击弹关于时临时显示，重启恢复隐藏">
+          <input type="checkbox" v-model="form.hidden" />
+          <span>前台隐藏</span>
         </label>
       </div>
       <div class="form-actions">

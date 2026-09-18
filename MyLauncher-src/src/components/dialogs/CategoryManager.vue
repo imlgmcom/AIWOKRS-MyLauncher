@@ -24,6 +24,8 @@ const form = ref({
   name: '',
   parent_id: null as string | null,
   view_mode: 'icon_grid' as ViewMode,
+  // 前台隐藏（仅非顶级分类可勾选）
+  hidden: false,
   // 新建分类时暂存的图标选择（保存后应用）
   icon: null as { type: 'emoji' | 'custom'; source: string } | null,
 })
@@ -87,7 +89,7 @@ function startNew(parentId: string | null) {
   editing.value = null
   newParentId.value = parentId
   panelAnchorId.value = parentId
-  form.value = { name: '', parent_id: parentId ?? null, view_mode: 'icon_grid', icon: null }
+  form.value = { name: '', parent_id: parentId ?? null, view_mode: 'icon_grid', hidden: false, icon: null }
   syncChildren.value = false
   scrollToPanel(parentId)
 }
@@ -101,6 +103,7 @@ function startEdit(cat: Category) {
     name: cat.name,
     parent_id: cat.parent_id,
     view_mode: cat.view_mode,
+    hidden: !!cat.hidden,
     icon: cat.icon ? { type: cat.icon.type as 'emoji' | 'custom', source: cat.icon.source } : null,
   }
   syncChildren.value = false
@@ -137,6 +140,7 @@ async function save() {
       parent_id: parentId,
       view_mode: form.value.view_mode,
       is_top_level: isNowTopLevel,
+      hidden: form.value.hidden,
     }
     if (parentId !== editing.value.parent_id) {
       // 移到新父级下，排到末尾
@@ -317,6 +321,7 @@ function onCatNameClick(cat: Category) {
               <span v-if="node.depth > 0" class="cat-tree-prefix">└</span>
               <CategoryIcon :category="node.cat" class="cat-icon-slot" />
               <span class="cat-name" @click="onCatNameClick(node.cat)">{{ node.cat.name }}</span>
+              <span v-if="node.cat.hidden" class="cat-hidden-badge" title="前台隐藏（LOGO 三击弹关于时临时显示）">已隐藏</span>
               <span class="cat-view-mode">{{ node.cat.view_mode }}</span>
               <div class="cat-row-actions">
                 <button class="btn btn-icon" title="新建子分类" @click.stop="startNew(node.cat.id)">+</button>
@@ -473,6 +478,15 @@ function onCatNameClick(cat: Category) {
   font-size: 13px;
   user-select: none;
   -webkit-user-select: none;
+}
+
+.cat-hidden-badge {
+  font-size: 10px;
+  color: #b45309;
+  background: rgba(245, 158, 11, 0.15);
+  padding: 2px 6px;
+  border-radius: 8px;
+  flex-shrink: 0;
 }
 
 .cat-view-mode {

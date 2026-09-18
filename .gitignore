@@ -1,11 +1,13 @@
-# 含个人 Token 的本地工具脚本
-git-tools.bat
+# 本地工作脚本（非源码）
+/*.bat
+/*.ps1
 
 # 便携版程序（不上传）
 MyLauncherPortable/
 
 # 临时文件
 .temp/
+test/
 
 # node_modules
 MyLauncher-src/node_modules/

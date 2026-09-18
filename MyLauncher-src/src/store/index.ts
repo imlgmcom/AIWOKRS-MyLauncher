@@ -32,6 +32,8 @@ interface StoreState {
   // 重置图标后文件内容更新但 URL 不变，WebView 用缓存的旧图；
   // bump 版本使 resolveAssetUrl 拼上 ?v= 参数强制重新加载
   iconVersions: Map<string, number>
+  // 隐藏分类临时解锁标志（LOGO 三击弹关于时置 true，重启/关闭软件自动失效，不持久化）
+  hiddenUnlocked: boolean
 }
 
 const state = reactive<StoreState>({
@@ -66,6 +68,7 @@ const state = reactive<StoreState>({
   selectedIds: new Set(),
   idCounter: 1,
   iconVersions: new Map(),
+  hiddenUnlocked: false,
 })
 
 // ─── 初始化 ───
@@ -89,10 +92,12 @@ export async function initStore() {
   const currentEnv = state.environments.find(e => e.is_current)
   state.currentEnvId = currentEnv?.id || state.environments[0]?.id || 'env_001'
 
-  // 设置默认选中第一个顶级分类
+  // 设置默认选中第一个可见的顶级分类（跳过隐藏分类；全隐藏时回退第一个顶级分类）
   const topCats = getTopCategories()
-  if (topCats.length > 0) {
-    state.currentCategoryId = topCats[0].id
+  const visibleTop = topCats.filter(c => !isCategoryHidden(c))
+  const firstCat = visibleTop[0] || topCats[0]
+  if (firstCat) {
+    state.currentCategoryId = firstCat.id
   }
 
   // 更新 ID 计数器
@@ -123,6 +128,21 @@ export function getCategoryById(id: string): Category | undefined {
   return state.categories.find(c => c.id === id)
 }
 
+// 判断分类是否应在前台隐藏（未解锁时 hidden 分类不可见）
+export function isCategoryHidden(cat: Category): boolean {
+  return !!cat.hidden && !state.hiddenUnlocked
+}
+
+// 获取可见的顶级分类（未解锁时过滤隐藏分类）
+export function getVisibleTopCategories(): Category[] {
+  return getTopCategories().filter(c => !isCategoryHidden(c))
+}
+
+// 临时解锁所有隐藏分类（LOGO 三击弹关于时调用，持续到关闭软件）
+export function unlockHiddenCategories() {
+  state.hiddenUnlocked = true
+}
+
 // 解析分类图标：返回 { emoji: string } 或 { img: string } 或 null
 export function resolveCategoryIcon(cat: Category | undefined): { emoji?: string; img?: string } | null {
   if (!cat || !cat.icon || !cat.icon.source) return null
@@ -132,23 +152,28 @@ export function resolveCategoryIcon(cat: Category | undefined): { emoji?: string
   return { img: resolveAssetUrl(cat.icon.source) }
 }
 
-// 获取当前分类下的所有条目（递归包含子分类）
+// 获取当前分类下的所有条目（递归包含子分类，跳过隐藏分类）
 export function getCurrentEntries(): Entry[] {
   if (!state.currentCategoryId) return []
 
-  // 收集当前分类及所有子分类 ID
+  // 收集当前分类及所有子分类 ID（隐藏分类及其子树跳过）
   const categoryIds = new Set<string>()
   const collectChildren = (parentId: string) => {
     categoryIds.add(parentId)
-    const subs = getSubCategories(parentId)
-    subs.forEach(sub => collectChildren(sub.id))
+    getSubCategories(parentId).forEach(sub => {
+      if (isCategoryHidden(sub)) return
+      collectChildren(sub.id)
+    })
   }
   collectChildren(state.currentCategoryId)
 
-  // 如果有搜索关键词，全局搜索
+  // 如果有搜索关键词，全局搜索（隐藏分类下的条目同样不出现）
   if (state.searchQuery.trim()) {
     const q = state.searchQuery.toLowerCase().trim()
+    const hiddenIds = new Set(state.categories.filter(c => isCategoryHidden(c)).map(c => c.id))
     return state.entries.filter(e => {
+      // 隐藏分类及其子树的条目不参与搜索
+      if (hiddenIds.has(e.category_id)) return false
       // 搜索时全局搜索，不限分类
       const matchName = e.name.toLowerCase().includes(q)
       const matchTags = e.tags.some(t => t.toLowerCase().includes(q))
@@ -192,6 +217,7 @@ export async function addCategory(name: string, parentId: string | null): Promis
     view_mode: 'icon_grid',
     sort_order: maxOrder + 1,
     is_top_level: parentId === null,
+    hidden: false,
   }
   state.categories.push(cat)
   await api.save_categories(state.categories)
@@ -203,6 +229,12 @@ export async function updateCategory(id: string, updates: Partial<Category>) {
   if (idx >= 0) {
     state.categories[idx] = { ...state.categories[idx], ...updates }
     await api.save_categories(state.categories)
+    // 当前选中分类被设为隐藏且未解锁时，回退到第一个可见的顶级分类
+    if (state.currentCategoryId === id && isCategoryHidden(state.categories[idx])) {
+      const topCats = getTopCategories().filter(c => c.id !== id)
+      const firstCat = topCats.find(c => !isCategoryHidden(c)) || topCats[0]
+      if (firstCat) state.currentCategoryId = firstCat.id
+    }
   }
 }
 
@@ -259,9 +291,11 @@ export async function deleteCategory(id: string, strategy: 'orphan' | 'delete' |
     await api.save_entries(state.entries)
   }
 
-  // 切换到第一个分类
+  // 切换到第一个可见分类（跳过隐藏分类；全隐藏时回退第一个顶级分类）
   const topCats = getTopCategories()
-  if (topCats.length > 0) state.currentCategoryId = topCats[0].id
+  const visibleTop = topCats.filter(c => !isCategoryHidden(c))
+  const firstCat = visibleTop[0] || topCats[0]
+  if (firstCat) state.currentCategoryId = firstCat.id
 }
 
 // 设置分类图标（emoji 字符或自定义图片路径）

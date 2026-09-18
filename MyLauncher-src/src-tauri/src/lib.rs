@@ -74,6 +74,9 @@ pub struct Category {
     pub view_mode: String,
     pub sort_order: i32,
     pub is_top_level: bool,
+    /// 前台隐藏（仅非顶级分类；LOGO 三击弹关于时临时解锁显示，重启恢复隐藏）
+    #[serde(default)]
+    pub hidden: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -479,6 +482,7 @@ fn default_categories() -> Vec<Category> {
             view_mode: "icon_grid".to_string(),
             sort_order: 1,
             is_top_level: true,
+            hidden: false,
         },
         Category {
             id: "cat_002".to_string(),
@@ -488,6 +492,7 @@ fn default_categories() -> Vec<Category> {
             view_mode: "vertical_card".to_string(),
             sort_order: 2,
             is_top_level: true,
+            hidden: false,
         },
         Category {
             id: "cat_003".to_string(),
@@ -497,6 +502,7 @@ fn default_categories() -> Vec<Category> {
             view_mode: "horizontal_card".to_string(),
             sort_order: 3,
             is_top_level: true,
+            hidden: false,
         },
         Category {
             id: "cat_004".to_string(),
@@ -506,6 +512,7 @@ fn default_categories() -> Vec<Category> {
             view_mode: "icon_grid".to_string(),
             sort_order: 4,
             is_top_level: true,
+            hidden: false,
         },
         Category {
             id: "cat_005".to_string(),
@@ -515,6 +522,7 @@ fn default_categories() -> Vec<Category> {
             view_mode: "icon_grid".to_string(),
             sort_order: 5,
             is_top_level: true,
+            hidden: false,
         },
     ]
 }

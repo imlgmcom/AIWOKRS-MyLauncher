@@ -19,7 +19,7 @@ import AboutDialog from '@/components/dialogs/AboutDialog.vue'
 import BatchToolbar from '@/components/BatchToolbar.vue'
 import ContextMenu, { type MenuItem } from '@/components/ContextMenu.vue'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import { state, initStore, getCurrentEntries, getCurrentCategory, getCategoryById, getSubCategories, updateCategory, createEntryDraft, initTheme, saveSettings } from '@/store'
+import { state, initStore, getCurrentEntries, getCurrentCategory, getCategoryById, getSubCategories, updateCategory, createEntryDraft, initTheme, saveSettings, unlockHiddenCategories } from '@/store'
 import { updateLastUsed, addEntry, deleteEntries } from '@/store'
 import * as api from '@/api'
 import type { Entry, EntryType } from '@/types'
@@ -48,6 +48,12 @@ const catManagerNewParentId = ref<string | null | undefined>(undefined)
 
 // 路径状态缓存
 const pathStatusMap = ref<Map<string, boolean>>(new Map())
+
+// LOGO 三击：弹出关于窗口的同时解锁隐藏分类（持续到关闭软件，不持久化）
+function openAboutAndUnlock() {
+  unlockHiddenCategories()
+  showAboutDialog.value = true
+}
 
 const currentEntries = computed(() => getCurrentEntries())
 const currentCategory = computed(() => getCurrentCategory())
@@ -423,7 +429,7 @@ onMounted(async () => {
   <div class="app-layout" v-if="!loading" @contextmenu.prevent>
     <!-- 顶部导航栏 -->
     <header class="app-header">
-      <TopNav @search="handleSearch" @open-settings="showAboutDialog = true" />
+      <TopNav @search="handleSearch" @open-settings="openAboutAndUnlock" />
     </header>
 
     <!-- 主体区域 -->

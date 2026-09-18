@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
-import { state, getCategoryById } from '@/store'
+import { state, getCategoryById, isCategoryHidden } from '@/store'
 import type { Category } from '@/types'
 import CategoryIcon from '@/components/CategoryIcon.vue'
 
@@ -22,12 +22,12 @@ const currentTopCategory = computed(() => {
   return cat || null
 })
 
-// 当前一级分类的直接子分类
+// 当前一级分类的直接子分类（跳过隐藏分类）
 const subCategories = computed(() => {
   const top = currentTopCategory.value
   if (!top) return []
   return state.categories
-    .filter(c => c.parent_id === top.id)
+    .filter(c => c.parent_id === top.id && !isCategoryHidden(c))
     .sort((a, b) => a.sort_order - b.sort_order)
 })
 
@@ -36,14 +36,14 @@ watch(currentTopCategory, (top) => {
   expandedIds.value.clear()
   if (top) {
     state.categories
-      .filter(c => c.parent_id === top.id)
+      .filter(c => c.parent_id === top.id && !isCategoryHidden(c))
       .forEach(c => expandedIds.value.add(c.id))
   }
 })
 
 function getChildren(parentId: string): Category[] {
   return state.categories
-    .filter(c => c.parent_id === parentId)
+    .filter(c => c.parent_id === parentId && !isCategoryHidden(c))
     .sort((a, b) => a.sort_order - b.sort_order)
 }
 

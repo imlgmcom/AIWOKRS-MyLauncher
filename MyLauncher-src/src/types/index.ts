@@ -44,6 +44,8 @@ export interface Category {
   view_mode: ViewMode
   sort_order: number
   is_top_level: boolean
+  /** 前台隐藏（仅非顶级分类；LOGO 三击弹关于时临时解锁，重启恢复隐藏） */
+  hidden: boolean
 }
 
 export interface Environment {

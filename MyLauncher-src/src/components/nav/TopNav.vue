@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
-import { state, getTopCategories, getCategoryById, switchEnvironment, resolveAssetUrl } from '@/store'
+import { state, getVisibleTopCategories, getCategoryById, switchEnvironment, resolveAssetUrl } from '@/store'
 import CategoryIcon from '@/components/CategoryIcon.vue'
 
 const emit = defineEmits<{
@@ -8,7 +8,7 @@ const emit = defineEmits<{
   (e: 'open-settings'): void
 }>()
 
-const topCats = computed(() => getTopCategories())
+const topCats = computed(() => getVisibleTopCategories())
 const searchQuery = ref('')
 
 // ─── LOGO 动态渲染 ───

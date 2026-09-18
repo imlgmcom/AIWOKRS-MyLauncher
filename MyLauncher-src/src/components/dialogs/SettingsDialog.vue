@@ -259,7 +259,7 @@ async function cleanAssets() {
 </script>
 
 <template>
-  <div class="dialog-overlay" @click.self="!saving && $emit('close')">
+  <div class="dialog-overlay settings-overlay" @click.self="!saving && $emit('close')">
     <div class="dialog settings-dialog">
       <div class="dialog-header">
         <span>设置</span>
@@ -478,6 +478,12 @@ async function cleanAssets() {
 <style scoped>
 .settings-dialog {
   width: 560px;
+}
+
+/* 设置对话框顶部对齐，避免切换 Tab 时高度变化导致垂直跳动 */
+.settings-overlay {
+  align-items: flex-start;
+  padding-top: 40px;
 }
 
 /* ─── Tab 导航 ─── */
