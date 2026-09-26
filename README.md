@@ -1,13 +1,4 @@
 ---
-AIGC:
-  ContentProducer: '001191110102MAD55U9H0F10002'
-  ContentPropagator: '001191110102MAD55U9H0F10002'
-  Label: '1'
-  ProduceID: 'af4028c0-94d9-41cb-8cfd-a969cac87931'
-  PropagateID: 'af4028c0-94d9-41cb-8cfd-a969cac87931'
-  ReservedCode1: '997e572c-d756-44d3-a1af-c08e83a5bdf6'
-  ReservedCode2: '997e572c-d756-44d3-a1af-c08e83a5bdf6'
----
 
 # MyLauncher
 
